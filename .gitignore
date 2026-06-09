@@ -1,0 +1,38 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build artifacts
+dist/
+build/
+*.app
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Xcode (念のため)
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# Logs
+*.log
+
+# Secrets / local config
+.env
+.env.local
+*.p12
+identity.p12
+
+# 個人化された LaunchAgent plist (sed展開後のもの)
+/tmp/com.clawdlisten.agent.plist
+
+# Dev-only scripts (作者のローカル開発専用、配布しない)
+scripts/dev-only/
+
+# Editor
+.vscode/
+.idea/

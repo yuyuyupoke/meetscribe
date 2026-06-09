@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>ja</string>
+    <key>CFBundleExecutable</key>
+    <string>ClawdListen</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.clawdlisten.app</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Clawd Listen</string>
+    <key>CFBundleDisplayName</key>
+    <string>Clawd Listen</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>2.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleIconFile</key>
+    <string>Clawd</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>会議中のマイク音声をリアルタイムで文字起こしするためにマイクへのアクセスが必要です。</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Claude CLIと連携して知識源フォルダの情報を参照するためにApple Eventsを使用します。</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>オンライン会議の音声（相手の声）をキャプチャして文字起こしするために画面収録権限が必要です。画面の映像は保存・送信しません。</string>
+</dict>
+</plist>

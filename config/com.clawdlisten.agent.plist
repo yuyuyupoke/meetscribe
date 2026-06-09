@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Clawd Listen LaunchAgent
+
+  Install (paths assume ~/Applications/Clawd\ Listen.app の場合):
+    1. このファイル内 $HOME を実パスに置換 (plist は変数展開不可)。
+       sed "s|\$HOME|$HOME|g" config/com.clawdlisten.agent.plist > /tmp/com.clawdlisten.agent.plist
+    2. cp /tmp/com.clawdlisten.agent.plist ~/Library/LaunchAgents/
+    3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.clawdlisten.agent.plist
+
+  Restart:
+    launchctl kickstart -k "gui/$(id -u)/com.clawdlisten.agent"
+
+  Uninstall:
+    launchctl bootout "gui/$(id -u)/com.clawdlisten.agent"
+    rm ~/Library/LaunchAgents/com.clawdlisten.agent.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.clawdlisten.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>$HOME/Applications/Clawd Listen.app/Contents/MacOS/ClawdListen</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>$HOME/Library/Logs/ClawdListen/launchagent.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>$HOME/Library/Logs/ClawdListen/launchagent.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
