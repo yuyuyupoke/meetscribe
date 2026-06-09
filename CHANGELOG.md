@@ -1,19 +1,26 @@
 # Changelog
 
-すべての注目すべき変更はこのファイルに記録する。[Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に準拠。
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.0.0] - 2026-06-09
 
-### 初回公開リリース
+Initial public release.
 
-- macOS 14+ 用 SwiftUI / AppKit ネイティブアプリ
-- マイク + システム音 2ストリーム独立キャプチャ
-- OpenAI Realtime API (`gpt-4o-transcribe`) でリアルタイム文字起こし
-- Voice Processing (AEC + AGC + ノイズ抑制) によるオンライン会議2重記録防止
-- `voiceProcessingOtherAudioDuckingConfiguration` (macOS 14+) でシステム音 ducking を最小化
-- Claude Code CLI 経由の会議中 Q&A (Claude Max サブスク活用)
-- ユーザー指定の知識源フォルダを `--add-dir` で動的渡し、Glob/Grep/Read で参照
-- フローティング小窓 (NSWindow.level = .floating、ScreenCaptureKit から不可視)
-- 議事録 Markdown 自動保存 (タイトル Claude 自動生成)
-- HSplitView で左右カラム幅をドラッグリサイズ可能
-- バッテリー軽量化: VU レベル更新 100ms throttle、権限再チェック 30秒 throttle
+### Added
+
+- macOS 14+ 向け SwiftUI / AppKit ネイティブアプリケーション
+- マイクとシステム音の 2 ストリーム独立キャプチャ
+- OpenAI Realtime API (`gpt-4o-transcribe`) によるリアルタイム文字起こし
+- Voice Processing (AEC / AGC / ノイズ抑制) によるオンライン会議の二重記録防止
+- `voiceProcessingOtherAudioDuckingConfiguration` (macOS 14+) によるシステム音 ducking 最小化
+- Claude Code CLI を介した会議中 Q&A 機能 (Claude Max サブスクリプション利用)
+- ユーザー指定の知識源フォルダを `--add-dir` で動的渡し、Glob / Grep / Read による参照
+- フローティング小窓 (`NSWindow.level = .floating`、ScreenCaptureKit から不可視)
+- 議事録の Markdown 自動保存 (タイトルは Claude が自動生成)
+- `HSplitView` による左右カラム幅のドラッグリサイズ
+- バッテリー消費低減のためのスロットリング (VU レベル更新 100ms、権限再チェック 30 秒)
+
+[1.0.0]: https://github.com/yuyuyupoke/clawd-listen/releases/tag/v1.0.0

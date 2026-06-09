@@ -42,11 +42,30 @@ struct ClawdQAView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                supportButton
             }
             modelPicker
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// 開発者サポート (note サポート記事へ遷移)。アイコンだけのさりげない配置。
+    private var supportButton: some View {
+        Button(action: openSupportLink) {
+            Image(systemName: "cup.and.saucer.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("開発者を note で応援する")
+    }
+
+    private func openSupportLink() {
+        guard let url = URL(string: "https://note.com/yuyuyu303030jp/n/n17ba34bf2ffb?app_launch=false") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private var clawdIcon: some View {
