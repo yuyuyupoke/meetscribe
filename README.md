@@ -195,7 +195,7 @@ cd clawd-listen
 
 ## ☕ サポート
 
-このアプリが役に立ったら [Buy Me a Coffee](https://buymeacoffee.com/yuyuyupoke) で開発を応援していただけると嬉しいです。
+このアプリが役に立ったら、開発者の [note でのサポート](https://note.com/yuyuyu303030jp/n/n17ba34bf2ffb?app_launch=false) で応援していただけると嬉しいです。
 
 ## 📄 License
 
