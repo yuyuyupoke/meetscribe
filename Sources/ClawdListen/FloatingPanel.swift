@@ -36,10 +36,9 @@ final class FloatingPanel: NSWindow {
         hasShadow = true
 
         // 画面共有・画面収録から除外 (Stealth / Private Window)
-        // Zoom 等で画面共有しても相手には映らない。本人には表示される。
-        // ⚠️ 一時的に .readOnly に変更中 (画面録画でアプリを映すため)。
-        // 撮影完了後は `.none` に戻すこと (Stealth 設計が本来の挙動)。
-        sharingType = .readOnly
+        // Zoom/Meet/Teams での画面共有、QuickTime/OBS/Loom 等の録画ツール、
+        // どれを使っても本ウィンドウは映らない。本人の画面上には通常表示される。
+        sharingType = .none
 
         // ほぼ solid の背景 (可読性優先)
         // .sidebar はシステム側で濃いガラス感を出す。blendingMode を withinWindow
