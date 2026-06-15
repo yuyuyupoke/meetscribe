@@ -1,15 +1,15 @@
-# Security Policy
+# セキュリティポリシー
 
-## Reporting a Vulnerability
+## 脆弱性の報告
 
-Please report security vulnerabilities through GitHub's
+セキュリティ脆弱性は、公開Issueではなく GitHub の
 [private vulnerability reporting](https://github.com/yuyuyupoke/clawd-listen/security/advisories/new)
-rather than opening a public issue.
+を通じて報告してください。
 
-Initial response within 72 hours. Please refrain from public disclosure until a fix is released.
+72時間以内に初回応答します。修正リリースまでは公開を控えてください。
 
-## Notes
+## 注意事項
 
-- OpenAI API keys are stored in the macOS Keychain (`com.clawdlisten.app` service).
-- Transcribed audio is sent to the OpenAI Realtime API. Do not use for confidential meetings without organizational approval.
-- Q&A queries are executed locally via the Claude Code CLI subprocess.
+- OpenAI API キーは macOS Keychain (`com.clawdlisten.app` サービス) に保存されます。
+- 文字起こし用の音声は OpenAI Realtime API に送信されます。組織の承認なしに機密会議で使用しないでください。
+- Q&A クエリは Claude Code CLI サブプロセス経由でローカル実行されます。

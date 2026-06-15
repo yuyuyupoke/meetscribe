@@ -1,33 +1,33 @@
 ---
 name: Bug report
-about: Report a defect in Clawd Listen
+about: Clawd Listen の不具合報告
 labels: bug
 ---
 
-## Summary
+## 概要
 
-<!-- One sentence describing the issue. -->
+<!-- 問題を1文で簡潔に記述 -->
 
-## Steps to Reproduce
+## 再現手順
 
 1.
 2.
 3.
 
-## Expected Behavior
+## 期待する挙動
 
-## Actual Behavior
+## 実際の挙動
 
-## Environment
+## 環境
 
-- macOS version:
-- Clawd Listen version:
-- Mac model (Apple Silicon / Intel):
-- Audio input device:
+- macOS バージョン:
+- Clawd Listen バージョン:
+- Mac モデル (Apple Silicon / Intel):
+- 音声入力デバイス:
 
-## Logs / Screenshots
+## ログ / スクリーンショット
 
 <!--
-- Logs: `~/Library/Logs/ClawdListen/clawd-listen.log` の関連部分
+- ログ: `~/Library/Logs/ClawdListen/clawd-listen.log` の関連部分
 - スクリーンショットがあれば添付
 -->

@@ -1,15 +1,15 @@
 ---
 name: Feature request
-about: Propose a new capability for Clawd Listen
+about: Clawd Listen の新機能を提案
 labels: enhancement
 ---
 
-## Problem
+## 課題
 
-<!-- What use case is not currently supported, or what friction exists? -->
+<!-- 現状サポートされていないユースケース、または存在する摩擦は何か？ -->
 
-## Proposal
+## 提案
 
-<!-- How should it work? -->
+<!-- どのように動作すべきか？ -->
 
-## Alternatives Considered
+## 検討した代替案

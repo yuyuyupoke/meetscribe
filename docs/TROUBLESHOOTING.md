@@ -1,49 +1,49 @@
-# Troubleshooting
+# トラブルシューティング
 
-## "App can't be opened — unidentified developer"
+## アプリを開けません — 開発元が未確認
 
-Ad-hoc signing triggers Gatekeeper on first launch.
+アドホック署名により初回起動時に Gatekeeper が作動する。
 
 ```bash
 xattr -cr "/Applications/Clawd Listen.app"
 ```
 
-Then right-click the app and choose **Open**.
+その後、アプリを右クリックして **開く** を選択。
 
-## "The Realtime Beta API is no longer supported"
+## "The Realtime Beta API is no longer supported" エラーが出る
 
-The OpenAI Realtime API Beta endpoint has been retired. Update to the latest release.
+OpenAI Realtime API Beta エンドポイントは廃止済み。最新リリースに更新せよ。
 
-## "claude CLI not found"
+## "claude CLI not found" エラーが出る
 
-Q&A requires Claude Code installed and reachable on `$PATH`.
+Q&A 機能には Claude Code が `$PATH` 上で利用可能な状態でインストールされている必要がある。
 
 ```bash
 which claude
 ```
 
-Install: [docs.claude.com/en/docs/claude-code/quickstart](https://docs.claude.com/en/docs/claude-code/quickstart)
+インストール: [docs.claude.com/en/docs/claude-code/quickstart](https://docs.claude.com/en/docs/claude-code/quickstart)
 
-## VU meter moves but no transcription
+## VU メーターは動くが文字起こしされない
 
-Quota exhausted or audio considered silent by server VAD.
+クォータ枯渇、またはサーバー側 VAD により無音と判定されている可能性がある。
 
-- Check usage: [platform.openai.com/usage](https://platform.openai.com/usage)
-- Try speaking louder, or move closer to the microphone
-- Confirm the input device in System Settings → Sound
+- 使用量を確認: [platform.openai.com/usage](https://platform.openai.com/usage)
+- もう少し大きな声で話す、またはマイクに近づく
+- システム設定 → サウンドで入力デバイスを確認
 
-## Microphone captures the other party (double-labeled transcript)
+## マイクが相手側の音声を拾う（二重ラベルのトランスクリプト）
 
-Voice Processing should prevent this, but in some Bluetooth headsets the echo path is too long.
+Voice Processing で抑制されるはずだが、一部の Bluetooth ヘッドセットではエコー経路が長すぎて回避できない場合がある。
 
-- Use wired headphones if possible
-- Lower output volume; AEC works better at moderate levels
+- 可能であれば有線ヘッドホンを使用する
+- 出力音量を下げる。AEC は中程度の音量で最も効果的に動作する
 
-## Resetting all preferences
+## 全設定をリセットする
 
 ```bash
 defaults delete com.clawdlisten.app
 launchctl bootout "gui/$(id -u)/com.clawdlisten.agent" 2>/dev/null
 ```
 
-Re-launch the app and re-enter API key and folders.
+アプリを再起動し、API キーとフォルダを再入力する。
