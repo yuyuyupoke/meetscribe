@@ -23,4 +23,4 @@ Initial public release.
 - `HSplitView` による左右カラム幅のドラッグリサイズ
 - バッテリー消費低減のためのスロットリング (VU レベル更新 100ms、権限再チェック 30 秒)
 
-[1.0.0]: https://github.com/yuyuyupoke/clawd-listen/releases/tag/v1.0.0
+[1.0.0]: https://github.com/yuyuyupoke/meetscribe/releases/tag/v1.0.0

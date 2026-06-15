@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# Clawd Listen v2 の E2E テスト (ウィンドウ座標を動的取得)
+# MeetScribe v2 の E2E テスト (ウィンドウ座標を動的取得)
 set -uo pipefail
 
-APP_BIN="$(cd "$(dirname "$0")/.." && pwd)/dist/Clawd Listen.app/Contents/MacOS/ClawdListen"
-LOG="/tmp/clawd-e2e.log"
-RESULT="/tmp/clawd-e2e-result.txt"
+APP_BIN="$(cd "$(dirname "$0")/.." && pwd)/dist/MeetScribe.app/Contents/MacOS/MeetScribe"
+LOG="/tmp/meetscribe-e2e.log"
+RESULT="/tmp/meetscribe-e2e-result.txt"
 
 rm -f "$LOG" "$RESULT"
 
-kill_app() { pkill -f "ClawdListen" 2>/dev/null; sleep 0.5; }
+kill_app() { pkill -f "MeetScribe" 2>/dev/null; sleep 0.5; }
 
 launch_app() {
     kill_app
     nohup "$APP_BIN" > "$LOG" 2>&1 &
     disown
     sleep 2.5
-    pgrep -f ClawdListen > /dev/null
+    pgrep -f MeetScribe > /dev/null
 }
 
 # ウィンドウ絶対座標を取得して変数にセット
 get_window_bounds() {
     osascript <<EOF
 tell application "System Events"
-    tell process "ClawdListen"
+    tell process "MeetScribe"
         set frontmost to true
         delay 0.3
         try
@@ -45,12 +45,12 @@ run_case() {
     local NAME="$1"
     local SCRIPT="$2"
     echo "== $NAME =="
-    if ! pgrep -f ClawdListen > /dev/null; then
+    if ! pgrep -f MeetScribe > /dev/null; then
         launch_app || { echo "  ❌ couldn't launch"; echo "$NAME: FAIL_LAUNCH" >> "$RESULT"; return; }
     fi
     osascript <<EOF 2>/dev/null
 tell application "System Events"
-    tell process "ClawdListen"
+    tell process "MeetScribe"
         set frontmost to true
     end tell
     delay 0.3
@@ -58,7 +58,7 @@ tell application "System Events"
 end tell
 EOF
     sleep 0.8
-    if pgrep -f ClawdListen > /dev/null; then
+    if pgrep -f MeetScribe > /dev/null; then
         echo "  ✅ PASS"
         echo "$NAME: PASS" >> "$RESULT"
     else

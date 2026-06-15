@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Clawd Listen 用の OpenAI API Key を Keychain にセットする
+# MeetScribe 用の OpenAI API Key を Keychain にセットする
 # アプリの KeychainStore.swift と同じ service/account を使う
 set -euo pipefail
 
-SERVICE="com.clawdlisten.app"
+SERVICE="com.meetscribe.app"
 ACCOUNT="openai-api-key"
 
 if [[ $# -gt 0 ]]; then

@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Clawd Listen"
+        panel.title = "MeetScribe"
         panel.contentViewController = hostingController
         panel.center()
         panel.makeKeyAndOrderFront(nil)
@@ -22,25 +22,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
-        // CLAWD_SMOKE_TEST=1 が指定されていたら、モデル切替を自動で回して
+        // MEETSCRIBE_SMOKE_TEST=1 が指定されていたら、モデル切替を自動で回して
         // クラッシュしないかを検証する (Phase 4 回帰テスト用)
-        if ProcessInfo.processInfo.environment["CLAWD_SMOKE_TEST"] == "1" {
+        if ProcessInfo.processInfo.environment["MEETSCRIBE_SMOKE_TEST"] == "1" {
             runSmokeTest()
         }
 
-        // CLAWD_AUTO_RECORD=1: 自動回帰テスト用。起動直後に録音開始 → N秒待機 →
-        // 録音停止 → 議事録保存 → アプリ終了。CLAWD_AUTO_RECORD_SEC で録音時間
-        // を指定 (デフォルト 10秒)。CLAWD_AUTO_MEETINGS_DIR で議事録保存先を
+        // MEETSCRIBE_AUTO_RECORD=1: 自動回帰テスト用。起動直後に録音開始 → N秒待機 →
+        // 録音停止 → 議事録保存 → アプリ終了。MEETSCRIBE_AUTO_RECORD_SEC で録音時間
+        // を指定 (デフォルト 10秒)。MEETSCRIBE_AUTO_MEETINGS_DIR で議事録保存先を
         // 一時的に上書き (テスト用、永続化はされない場合がある)。外部から
         // `say` 等で音声を流して文字起こしが動くか検証するためのフック。
-        if ProcessInfo.processInfo.environment["CLAWD_AUTO_RECORD"] == "1" {
+        if ProcessInfo.processInfo.environment["MEETSCRIBE_AUTO_RECORD"] == "1" {
             let seconds = TimeInterval(
-                ProcessInfo.processInfo.environment["CLAWD_AUTO_RECORD_SEC"]
+                ProcessInfo.processInfo.environment["MEETSCRIBE_AUTO_RECORD_SEC"]
                     .flatMap { Double($0) } ?? 10.0
             )
             Task { @MainActor in
                 // テスト用に議事録保存先を環境変数から上書き
-                if let dir = ProcessInfo.processInfo.environment["CLAWD_AUTO_MEETINGS_DIR"] {
+                if let dir = ProcessInfo.processInfo.environment["MEETSCRIBE_AUTO_MEETINGS_DIR"] {
                     let url = URL(fileURLWithPath: dir)
                     try? FileManager.default.createDirectory(
                         at: url, withIntermediateDirectories: true
@@ -145,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 保存先を一時ディレクトリにして TranscriptExporter を直接検証
         let tmpDir = FileManager.default.temporaryDirectory
-            .appending(path: "clawd-smoke-\(UUID().uuidString.prefix(8))")
+            .appending(path: "meetscribe-smoke-\(UUID().uuidString.prefix(8))")
         let record = MeetingRecord(
             startedAt: now.addingTimeInterval(-60),
             endedAt: now,

@@ -1,7 +1,7 @@
-# Clawd Listen セットアップガイド（AI エージェント向け）
+# MeetScribe セットアップガイド（AI エージェント向け）
 
 > **このドキュメントについて**
-> このガイドは、Clawd Listen を利用したいユーザーの代わりに、AI エージェント
+> このガイドは、MeetScribe を利用したいユーザーの代わりに、AI エージェント
 > （Claude Code など）が macOS 環境へセットアップを行うための手順書です。
 > ユーザーは「このリポジトリを読んでセットアップして」と AI に依頼することを想定しています。
 >
@@ -14,7 +14,7 @@
 
 ## 前提知識
 
-Clawd Listen は次の構成で動作する macOS ネイティブアプリです。
+MeetScribe は次の構成で動作する macOS ネイティブアプリです。
 
 - **文字起こし**: OpenAI Realtime API (`gpt-4o-transcribe`) — OpenAI API キーが必要（有料）
 - **会議中 Q&A**: Claude Code CLI (`claude -p`) — Claude の Pro / Max サブスクリプション推奨
@@ -24,6 +24,11 @@ Clawd Listen は次の構成で動作する macOS ネイティブアプリです
 > ScreenCaptureKit がシステム音声を直接キャプチャするため、オーディオルーティングの
 > 設定は要りません。古い記事で BlackHole + Multi-Output Device の設定を求めるものが
 > ありますが、本アプリ（ScreenCaptureKit 版）には当てはまりません。
+
+> **注意（規約）**: Q&A 機能はユーザー自身の Claude サブスクリプションを Claude Code CLI
+> 経由で使用します。[Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms)
+> を確認の上、自己責任でご利用ください。MeetScribe は Anthropic / OpenAI とは無関係の
+> 非公式プロジェクトです。
 
 ---
 
@@ -56,7 +61,7 @@ which claude
 
 1. ブラウザで [platform.openai.com/api-keys](https://platform.openai.com/api-keys) を開く。
 2. OpenAI アカウントでログイン（なければ新規登録）。
-3. **「Create new secret key」** をクリックし、名前（例: `clawd-listen`）を付けて作成。
+3. **「Create new secret key」** をクリックし、名前（例: `meetscribe`）を付けて作成。
 4. 表示された `sk-proj-...` で始まるキーをコピーして控える（**この画面を閉じると再表示されない**）。
 5. [platform.openai.com/settings/organization/billing](https://platform.openai.com/settings/organization/billing)
    で支払い方法を登録し、`gpt-4o-transcribe` を利用できる残高があることを確認する。
@@ -81,7 +86,7 @@ which claude
 ./build.sh
 ```
 
-成功すると `dist/Clawd Listen.app` が生成されます。
+成功すると `dist/MeetScribe.app` が生成されます。
 
 - `setup-signing.sh` はコード署名用の自己署名証明書を作成し、再ビルド時に
   マイク・画面収録権限が維持されるようにします。**ログインパスワードの入力が必要**な
@@ -94,13 +99,13 @@ which claude
 
 ```bash
 # .app を Applications へコピー
-cp -R "dist/Clawd Listen.app" /Applications/
+cp -R "dist/MeetScribe.app" /Applications/
 
 # 初回起動の Gatekeeper 警告を回避（ad-hoc 署名のため）
-xattr -cr "/Applications/Clawd Listen.app"
+xattr -cr "/Applications/MeetScribe.app"
 
 # 起動
-open "/Applications/Clawd Listen.app"
+open "/Applications/MeetScribe.app"
 ```
 
 `xattr -cr` を実行しない場合、「開発元が未確認」と表示されて起動できません。
@@ -113,7 +118,7 @@ open "/Applications/Clawd Listen.app"
 アプリ起動後、初回セットアップ画面が表示されます。次の 2 つの権限をユーザーに付与してもらいます。
 
 1. **マイク** — セットアップ画面の「許可する」をクリック → OS のダイアログで許可。
-2. **画面収録** — 「許可する」をクリック → システム設定が開く → Clawd Listen を ON →
+2. **画面収録** — 「許可する」をクリック → システム設定が開く → MeetScribe を ON →
    **アプリの再起動が必要**（画面収録権限は再起動後に有効化される）。
 
 権限の状態はセットアップ画面の更新ボタン（↻）で再チェックできます。
@@ -151,9 +156,9 @@ open "/Applications/Clawd Listen.app"
 ログイン時に自動起動させたい場合:
 
 ```bash
-sed "s|\$HOME|$HOME|g" config/com.clawdlisten.agent.plist \
-  > ~/Library/LaunchAgents/com.clawdlisten.agent.plist
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.clawdlisten.agent.plist
+sed "s|\$HOME|$HOME|g" config/com.meetscribe.agent.plist \
+  > ~/Library/LaunchAgents/com.meetscribe.agent.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.plist
 ```
 
 ---

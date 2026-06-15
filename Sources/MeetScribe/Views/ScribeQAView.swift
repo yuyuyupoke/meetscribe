@@ -1,11 +1,11 @@
 import SwiftUI
 import AppKit
 
-/// 小窓右カラム。Clawd が会議を傍聴しつつ Q&A に答える UI。
-/// - 上部: Clawd アイコン + ステータス + モデル選択
+/// 小窓右カラム。Scribe が会議を傍聴しつつ Q&A に答える UI。
+/// - 上部: Scribe アイコン + ステータス + モデル選択
 /// - 中央: Q&A 履歴 (ユーザー質問 + Claude回答)
 /// - 下部: 入力欄 (InputBarView)
-struct ClawdQAView: View {
+struct ScribeQAView: View {
     @Bindable var state: AppState
     let transcripts: TranscriptStore
     @Binding var queryText: String
@@ -28,14 +28,14 @@ struct ClawdQAView: View {
         }
     }
 
-    // MARK: - ヘッダ (Clawd アイコン + ステータス + モデル選択)
+    // MARK: - ヘッダ (Scribe アイコン + ステータス + モデル選択)
 
     private var headerBar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                clawdIcon
+                meetscribeIcon
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Clawd")
+                    Text("Scribe")
                         .font(.system(size: 12, weight: .semibold))
                     Text(statusText)
                         .font(.system(size: 9))
@@ -68,9 +68,9 @@ struct ClawdQAView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private var clawdIcon: some View {
+    private var meetscribeIcon: some View {
         Group {
-            if let url = Bundle.main.url(forResource: "Clawd", withExtension: "png"),
+            if let url = Bundle.main.url(forResource: "Scribe", withExtension: "png"),
                let nsImage = NSImage(contentsOf: url) {
                 Image(nsImage: nsImage)
                     .resizable()

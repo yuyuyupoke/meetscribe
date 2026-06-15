@@ -199,7 +199,7 @@ final class ClaudeQAClient: @unchecked Sendable {
             """
         }
         return """
-        あなたは Clawd Listen というミーティング傍聴アシスタントです。
+        あなたは MeetScribe というミーティング傍聴アシスタントです。
         ユーザーが参加している会議の文字起こしをリアルタイムで聞いており、
         質問されたときに的確に答えることが役割です。
 

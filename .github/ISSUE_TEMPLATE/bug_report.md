@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Clawd Listen の不具合報告
+about: MeetScribe の不具合報告
 labels: bug
 ---
 
@@ -21,13 +21,13 @@ labels: bug
 ## 環境
 
 - macOS バージョン:
-- Clawd Listen バージョン:
+- MeetScribe バージョン:
 - Mac モデル (Apple Silicon / Intel):
 - 音声入力デバイス:
 
 ## ログ / スクリーンショット
 
 <!--
-- ログ: `~/Library/Logs/ClawdListen/clawd-listen.log` の関連部分
+- ログ: `~/Library/Logs/MeetScribe/meetscribe.log` の関連部分
 - スクリーンショットがあれば添付
 -->

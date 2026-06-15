@@ -3,7 +3,7 @@ import Security
 
 /// macOS Keychain を使って OpenAI API Key を安全に保存する。
 enum KeychainStore {
-    static let service = "com.clawdlisten.app"
+    static let service = "com.meetscribe.app"
     static let account = "openai-api-key"
 
     enum KeychainError: Error, LocalizedError {

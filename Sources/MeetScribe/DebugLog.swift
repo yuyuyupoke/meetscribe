@@ -1,18 +1,18 @@
 import Foundation
 
 /// アプリ稼働ログ。
-/// - release/debug いずれでも `~/Library/Logs/ClawdListen/clawd-listen.log` に追記
+/// - release/debug いずれでも `~/Library/Logs/MeetScribe/meetscribe.log` に追記
 /// - 標準エラーには NSLog (Console.app と launchagent.err.log にも残る)
 /// - 重要イベントのみ呼び出す前提 (音声デルタなど高頻度のものは含めない)
 /// - ファイル I/O は専用シリアルキューで実行 (オーディオスレッドをブロックしない)
 enum DebugLog {
-    private static let queue = DispatchQueue(label: "com.clawdlisten.app.log", qos: .utility)
+    private static let queue = DispatchQueue(label: "com.meetscribe.app.log", qos: .utility)
     private static let logURL: URL = {
         let fm = FileManager.default
         let logsDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/ClawdListen", isDirectory: true)
+            .appendingPathComponent("Library/Logs/MeetScribe", isDirectory: true)
         try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        return logsDir.appendingPathComponent("clawd-listen.log")
+        return logsDir.appendingPathComponent("meetscribe.log")
     }()
 
     static func log(_ message: @autoclosure () -> String) {

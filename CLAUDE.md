@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-このリポジトリは **Clawd Listen** — macOS 向けのリアルタイム会議文字起こし & Q&A アプリ
+このリポジトリは **MeetScribe** — macOS 向けのリアルタイム会議文字起こし & Q&A アプリ
 （Swift / SwiftUI）です。
 
 ## ユーザーからセットアップを依頼されたら

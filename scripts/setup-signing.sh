@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Clawd Listen v2 用の自己署名コード署名証明書をセットアップ
+# MeetScribe v2 用の自己署名コード署名証明書をセットアップ
 # 一度だけ実行すれば、以降のリビルドでTCC権限が安定する
 set -euo pipefail
 
-CERT_NAME="Clawd Listen Dev"
+CERT_NAME="MeetScribe Dev"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 WORK_DIR="$(mktemp -d)"
 trap "rm -rf $WORK_DIR" EXIT
@@ -29,7 +29,7 @@ prompt = no
 x509_extensions = v3_req
 
 [req_distinguished_name]
-CN = Clawd Listen Dev
+CN = MeetScribe Dev
 
 [v3_req]
 basicConstraints = critical, CA:FALSE
@@ -85,7 +85,7 @@ else
     echo ""
     echo "Keychain Access.app で手動で秘密鍵のアクセス制御を設定してください:"
     echo "  1. Keychain Access を開く"
-    echo "  2. login keychain → 鍵 (カテゴリ) → 'Clawd Listen Dev' の秘密鍵"
+    echo "  2. login keychain → 鍵 (カテゴリ) → 'MeetScribe Dev' の秘密鍵"
     echo "  3. 右クリック → 情報を見る → アクセス制御タブ"
     echo "  4. '常にアクセスを許可' に設定"
     exit 1

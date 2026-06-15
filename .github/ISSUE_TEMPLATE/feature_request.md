@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Clawd Listen の新機能を提案
+about: MeetScribe の新機能を提案
 labels: enhancement
 ---
 

@@ -49,7 +49,7 @@ enum PermissionManager {
                 // 成功時はログに出さない (頻繁すぎてバッテリー&ノイズ源になるため)。
                 granted = true
             } catch {
-                DebugLog.log("[ClawdListen] SCShareableContent FAIL: \(error.localizedDescription)")
+                DebugLog.log("[MeetScribe] SCShareableContent FAIL: \(error.localizedDescription)")
                 errorDetail = "\(error.localizedDescription)"
                 granted = false
             }

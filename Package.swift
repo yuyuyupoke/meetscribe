@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClawdListen",
+    name: "MeetScribe",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "ClawdListen", targets: ["ClawdListen"])
+        .executable(name: "MeetScribe", targets: ["MeetScribe"])
     ],
     targets: [
         .executableTarget(
-            name: "ClawdListen",
-            path: "Sources/ClawdListen"
+            name: "MeetScribe",
+            path: "Sources/MeetScribe"
         )
     ]
 )

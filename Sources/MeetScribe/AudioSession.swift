@@ -81,7 +81,7 @@ final class AudioSession {
     // MARK: - Start
 
     func start() async {
-        DebugLog.log("[ClawdListen] AudioSession.start()")
+        DebugLog.log("[MeetScribe] AudioSession.start()")
         AppState.shared.captureStatus = .starting
         AppState.shared.lastError = nil
         AppState.shared.lastSavedURL = nil
@@ -144,7 +144,7 @@ final class AudioSession {
         // 会議開始時刻をマーク + 無音検知タイマー起動 (10分)
         AppState.shared.meetingStartedAt = Date()
         let detector = SilenceDetector(timeoutMinutes: 10.0) { [weak self] in
-            DebugLog.log("[ClawdListen] silence timeout → auto-stop")
+            DebugLog.log("[MeetScribe] silence timeout → auto-stop")
             Task { await self?.stop() }
         }
         detector.start()
@@ -156,7 +156,7 @@ final class AudioSession {
     // MARK: - Stop (正常終了: 議事録を保存)
 
     func stop() async {
-        DebugLog.log("[ClawdListen] AudioSession.stop() - with save")
+        DebugLog.log("[MeetScribe] AudioSession.stop() - with save")
         AppState.shared.captureStatus = .stopping
 
         let startedAt = AppState.shared.meetingStartedAt
@@ -171,7 +171,7 @@ final class AudioSession {
         // 発話が無ければ保存しない
         let meetingEntries = TranscriptStore.shared.meetingEntries
         guard let startedAt = startedAt, !meetingEntries.isEmpty else {
-            DebugLog.log("[ClawdListen] empty transcript → skip save")
+            DebugLog.log("[MeetScribe] empty transcript → skip save")
             AppState.shared.meetingStartedAt = nil
             return
         }
@@ -183,7 +183,7 @@ final class AudioSession {
     // MARK: - Kill (緊急停止: 保存しない)
 
     func kill() async {
-        DebugLog.log("[ClawdListen] AudioSession.kill() - no save")
+        DebugLog.log("[MeetScribe] AudioSession.kill() - no save")
         AppState.shared.captureStatus = .stopping
         microphone.stop()
         await systemAudio.stop()
@@ -209,7 +209,7 @@ final class AudioSession {
         // 1. タイトル生成 (Claude sonnet ~15秒)
         let transcriptText = TranscriptStore.shared.meetingTranscriptText
         let title = await MeetingTitleGenerator.generate(from: transcriptText)
-        DebugLog.log("[ClawdListen] generated title: \(title)")
+        DebugLog.log("[MeetScribe] generated title: \(title)")
 
         // 2. レコード組み立て + 保存
         let record = MeetingRecord(
@@ -224,10 +224,10 @@ final class AudioSession {
         do {
             let url = try TranscriptExporter.save(record, to: AppState.shared.meetingsSaveDirectoryURL)
             AppState.shared.lastSavedURL = url
-            DebugLog.log("[ClawdListen] saved to: \(url.path)")
+            DebugLog.log("[MeetScribe] saved to: \(url.path)")
         } catch {
             AppState.shared.lastError = "議事録保存失敗: \(error.localizedDescription)"
-            DebugLog.log("[ClawdListen] save failed: \(error.localizedDescription)")
+            DebugLog.log("[MeetScribe] save failed: \(error.localizedDescription)")
         }
     }
 
@@ -289,7 +289,7 @@ final class AudioSession {
     private func runReconnectLoop(speaker: SpeakerLabel) async {
         AppState.shared.reconnectingStreams.insert(speaker)
         setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 接続切れ、再接続中…")
-        DebugLog.log("[ClawdListen] reconnect start for \(speaker.rawValue)")
+        DebugLog.log("[MeetScribe] reconnect start for \(speaker.rawValue)")
 
         guard let apiKey = KeychainStore.read(), !apiKey.isEmpty else {
             setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続失敗: APIキー未設定")
@@ -312,7 +312,7 @@ final class AudioSession {
                 // connect 中に stop/kill が来ていたらゾンビ client を残さず破棄して終了
                 if Task.isCancelled || !AppState.shared.isRunning {
                     newClient.disconnect()
-                    DebugLog.log("[ClawdListen] reconnect cancelled after connect for \(speaker.rawValue)")
+                    DebugLog.log("[MeetScribe] reconnect cancelled after connect for \(speaker.rawValue)")
                     return
                 }
                 // 成功: pipeline を差し替えて、新コールバックも取り付ける
@@ -332,10 +332,10 @@ final class AudioSession {
                 }
                 AppState.shared.reconnectingStreams.remove(speaker)
                 clearReconnectErrorIfMine()
-                DebugLog.log("[ClawdListen] reconnect succeeded for \(speaker.rawValue) (attempt \(attempt + 1))")
+                DebugLog.log("[MeetScribe] reconnect succeeded for \(speaker.rawValue) (attempt \(attempt + 1))")
                 return
             } catch {
-                DebugLog.log("[ClawdListen] reconnect attempt \(attempt + 1) failed for \(speaker.rawValue): \(error.localizedDescription)")
+                DebugLog.log("[MeetScribe] reconnect attempt \(attempt + 1) failed for \(speaker.rawValue): \(error.localizedDescription)")
                 newClient.disconnect()
                 setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続失敗 (\(attempt + 1)/\(Self.maxReconnectAttempts)): \(error.localizedDescription)")
             }
@@ -343,7 +343,7 @@ final class AudioSession {
 
         AppState.shared.reconnectingStreams.remove(speaker)
         setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続を諦めました。録音は継続しますが、文字起こしは止まります。")
-        DebugLog.log("[ClawdListen] reconnect gave up for \(speaker.rawValue)")
+        DebugLog.log("[MeetScribe] reconnect gave up for \(speaker.rawValue)")
     }
 
     /// 再接続関連のエラーメッセージだけを更新する (他種のエラーを上書きしない方針を保ちつつ、

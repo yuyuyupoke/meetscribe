@@ -49,7 +49,7 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
         try stream.addStreamOutput(
             output,
             type: .audio,
-            sampleHandlerQueue: DispatchQueue(label: "com.clawdlisten.app.sysaudio", qos: .userInitiated)
+            sampleHandlerQueue: DispatchQueue(label: "com.meetscribe.app.sysaudio", qos: .userInitiated)
         )
         try await stream.startCapture()
 

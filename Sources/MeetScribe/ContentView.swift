@@ -2,7 +2,7 @@ import SwiftUI
 
 /// メインUI。2カラム構成:
 /// - 左: 会議文字起こしストリーム (`TranscriptListView`)
-/// - 右: Clawd Q&A エリア (`ClawdQAView`)
+/// - 右: Scribe Q&A エリア (`ScribeQAView`)
 /// HSplitView でドラッグによる左右リサイズが可能。VUメーターは HeaderView に統合済。
 struct ContentView: View {
     @Bindable private var state = AppState.shared
@@ -31,7 +31,7 @@ struct ContentView: View {
                 HSplitView {
                     TranscriptListView(state: state, transcripts: transcripts)
                         .frame(minWidth: 200, idealWidth: 300, maxWidth: .infinity)
-                    ClawdQAView(
+                    ScribeQAView(
                         state: state,
                         transcripts: transcripts,
                         queryText: $state.queryText,
