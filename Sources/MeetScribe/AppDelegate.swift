@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let panel = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -269,10 +269,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSWindowDelegate {
-    /// ×ボタンでウィンドウを閉じる代わりに隠すだけにする。メニューバー常駐アプリ
-    /// として、ウィンドウは破棄せず再表示できるようにする (録音はバックグラウンドで継続)。
+    /// ×ボタン = アプリ終了。applicationWillTerminate → shutdownSync で録音と
+    /// 画面共有 (ScreenCaptureKit / SCStream) を停止してから終了する。
+    /// 「隠す」のではなく「終了」する (ウィンドウを残したいときは −ボタンで最小化)。
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
+        NSApp.terminate(nil)
         return false
     }
 }
