@@ -166,6 +166,8 @@ final class AudioSession {
         silenceDetector?.stop()
         silenceDetector = nil
         tearDown()
+        AppState.shared.micLevel = 0.0
+        AppState.shared.systemLevel = 0.0
         AppState.shared.captureStatus = .idle
 
         // 発話が無ければ保存しない
@@ -191,9 +193,29 @@ final class AudioSession {
         silenceDetector = nil
         tearDown()
         TranscriptStore.shared.clear()
+        AppState.shared.micLevel = 0.0
+        AppState.shared.systemLevel = 0.0
         AppState.shared.captureStatus = .idle
         AppState.shared.meetingStartedAt = nil
         AppState.shared.lastSavedURL = nil
+    }
+
+    // MARK: - 同期シャットダウン (アプリ終了時)
+
+    /// `applicationWillTerminate` から呼ぶ同期クリーンアップ。terminate 後は
+    /// runloop が回らず async (`await systemAudio.stop()`) を待てないため、共有
+    /// オーディオリソース (Voice Processing IO / SCStream) の解放を同期的に行う。
+    /// 議事録の保存はしない (時間がかかり terminate に間に合わないため)。
+    /// これを怠ると coreaudiod に孤児リソースが残り Mac 全体がフリーズする。
+    func shutdownSync() {
+        DebugLog.log("[MeetScribe] AudioSession.shutdownSync()")
+        microphone.stop()        // VPIO を同期解放
+        systemAudio.stopSync()   // SCStream をベストエフォート停止
+        silenceDetector?.stop()
+        silenceDetector = nil
+        tearDown()
+        AppState.shared.micLevel = 0.0
+        AppState.shared.systemLevel = 0.0
     }
 
     // MARK: - 保存フロー

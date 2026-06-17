@@ -39,6 +39,8 @@ struct ContentView: View {
                     )
                     .frame(minWidth: 200, idealWidth: 300, maxWidth: .infinity)
                 }
+                Divider().opacity(0.3)
+                SettingsFooterView(state: state)
             }
             .padding(.top, 28)
         }

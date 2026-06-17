@@ -1,8 +1,11 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: FloatingPanel?
+    private var statusItem: NSStatusItem?
+    private var statusTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let contentView = ContentView()
@@ -21,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panel = panel
 
         NSApp.activate(ignoringOtherApps: true)
+
+        setupMenuBar()
 
         // MEETSCRIBE_SMOKE_TEST=1 が指定されていたら、モデル切替を自動で回して
         // クラッシュしないかを検証する (Phase 4 回帰テスト用)
@@ -61,6 +66,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+    }
+
+    // MARK: - メニューバー常駐
+
+    private func setupMenuBar() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            button.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "MeetScribe")
+            button.image?.isTemplate = true
+            button.toolTip = "MeetScribe"
+        }
+
+        let menu = NSMenu()
+        menu.delegate = self
+
+        let show = NSMenuItem(title: "ウィンドウを表示", action: #selector(showMainWindow), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+
+        menu.addItem(.separator())
+
+        let rec = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "")
+        rec.target = self
+        rec.tag = 100
+        menu.addItem(rec)
+
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(title: "MeetScribe を終了", action: #selector(quitApp), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+
+        item.menu = menu
+        statusItem = item
+
+        // 録音中はメニューバーアイコンを赤く着色 (0.5秒間隔で同期)
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.statusItem?.button?.contentTintColor =
+                    AppState.shared.isRunning ? .systemRed : nil
+            }
+        }
+    }
+
+    @objc private func showMainWindow() {
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func toggleRecording() {
+        Task { @MainActor in
+            if AppState.shared.isRunning {
+                await AudioSession.shared.stop()
+            } else if AppState.shared.canStart {
+                await AudioSession.shared.start()
+            } else {
+                // 録音開始できない場合はセットアップを促すためウィンドウを出す
+                self.panel?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 
     private func runSmokeTest() {
@@ -182,6 +252,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        // メニューバー常駐のため、ウィンドウを閉じてもアプリは終了しない。
+        // 終了はメニューバーの「MeetScribe を終了」から。
+        false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // 共有オーディオリソース (Voice Processing IO / SCStream) を同期解放する。
+        // これを怠ると coreaudiod に孤児リソースが残り、終了後に Mac 全体の
+        // オーディオ HAL がブロックしてフリーズする。録音中の終了でも安全に。
+        statusTimer?.invalidate()
+        statusTimer = nil
+        AudioSession.shared.shutdownSync()
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        // 録音状態に応じてメニュー項目のラベル/有効状態を更新
+        guard let rec = menu.item(withTag: 100) else { return }
+        let state = AppState.shared
+        if state.isRunning {
+            rec.title = "録音停止 & 議事録保存"
+            rec.isEnabled = true
+        } else {
+            rec.title = "録音開始"
+            rec.isEnabled = state.canStart
+        }
     }
 }

@@ -10,7 +10,6 @@ struct HeaderView: View {
         HStack(spacing: 10) {
             // 左側はドラッグ用の空白
             Spacer()
-            knowledgeFolderButton
             VUMeterView(state: state)
             reconnectBadge
             costLabel
@@ -19,49 +18,6 @@ struct HeaderView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-    }
-
-    /// 知識源フォルダの選択/変更ボタン。アイコン + フォルダ名 (lastPathComponent) を
-    /// 常時表示。マウスオーバーでフルパス (tilde 短縮) が tooltip に出る。
-    private var knowledgeFolderButton: some View {
-        Button(action: selectKnowledgeFolder) {
-            HStack(spacing: 3) {
-                Image(systemName: state.knowledgeFolderURL == nil
-                      ? "folder.badge.plus"
-                      : "folder.fill")
-                    .foregroundStyle(state.knowledgeFolderURL == nil ? Color.gray : Color.blue)
-                    .font(.system(size: 12))
-                if let url = state.knowledgeFolderURL {
-                    Text(url.lastPathComponent)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.primary.opacity(0.7))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 120)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .help(state.knowledgeFolderURL
-              .map { "知識源フォルダ: \(Self.tildePath($0))（クリックで変更）" }
-              ?? "知識源フォルダを選択（Q&A時にClaudeが参照）")
-    }
-
-    /// ホームディレクトリを `~` に短縮したパス表記を返す。
-    static func tildePath(_ url: URL) -> String {
-        (url.path as NSString).abbreviatingWithTildeInPath
-    }
-
-    private func selectKnowledgeFolder() {
-        let panel = NSOpenPanel()
-        panel.title = "知識源フォルダを選択"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
-            state.knowledgeFolderURL = url
-        }
     }
 
     /// 現セッションでの OpenAI 累計コスト。0 でも常時表示してユーザーが

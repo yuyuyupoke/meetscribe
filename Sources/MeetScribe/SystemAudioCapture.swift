@@ -67,9 +67,19 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
         streamOutput = nil
         bufferHandler = nil
         isRunning = false
-        await MainActor.run {
-            AppState.shared.systemLevel = 0.0
-        }
+        // systemLevel のリセットは呼び出し側 (AudioSession, @MainActor) で行う。
+    }
+
+    /// アプリ終了直前用の同期停止。terminate 後は runloop が回らず await できないため
+    /// `stopCapture` の完了は待たない (プロセス消滅が先)。SCStream の解放要求だけ
+    /// 確実に投げて、孤児ストリームが OS に残らないようにする。
+    func stopSync() {
+        guard isRunning else { return }
+        stream?.stopCapture { _ in }
+        stream = nil
+        streamOutput = nil
+        bufferHandler = nil
+        isRunning = false
     }
 
     private var lastLevelUpdate: TimeInterval = 0

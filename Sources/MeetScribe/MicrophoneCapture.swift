@@ -78,11 +78,15 @@ final class MicrophoneCapture: @unchecked Sendable {
         guard isRunning else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        // VoiceProcessingIO AudioUnit (AEC/AGC/NS) を明示解放する。これを怠ると
+        // CoreAudio (coreaudiod) に孤児 VPIO が残り、プロセス終了時に OS 全体の
+        // オーディオ HAL がブロックして Mac がフリーズする。setVoiceProcessingEnabled
+        // が start 時に失敗していても try? で無害。
+        try? engine.inputNode.setVoiceProcessingEnabled(false)
         bufferHandler = nil
         isRunning = false
-        Task { @MainActor in
-            AppState.shared.micLevel = 0.0
-        }
+        // micLevel のリセットは呼び出し側 (AudioSession, @MainActor) で行う。
+        // ここで Task を撒くと、アプリ終了経路でスケジュール前にプロセスが消える。
     }
 
     /// 多チャンネル PCM バッファからチャンネル0のみを取り出して
