@@ -35,6 +35,11 @@ final class FloatingPanel: NSWindow {
         backgroundColor = .clear
         hasShadow = true
 
+        // NSWindow はデフォルトで「閉じると自身を解放 (isReleasedWhenClosed=true)」する。
+        // メニューバー常駐アプリではウィンドウを閉じても保持し続け再表示するため、
+        // false にしないと閉じた後の再表示で解放済みメモリにアクセスしクラッシュする。
+        isReleasedWhenClosed = false
+
         // 画面共有・画面収録から除外 (Stealth / Private Window)
         // Zoom/Meet/Teams での画面共有、QuickTime/OBS/Loom 等の録画ツール、
         // どれを使っても本ウィンドウは映らない。本人の画面上には通常表示される。

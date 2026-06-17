@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         panel.title = "MeetScribe"
         panel.contentViewController = hostingController
+        panel.delegate = self
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         self.panel = panel
@@ -264,6 +265,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusTimer?.invalidate()
         statusTimer = nil
         AudioSession.shared.shutdownSync()
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    /// ×ボタンでウィンドウを閉じる代わりに隠すだけにする。メニューバー常駐アプリ
+    /// として、ウィンドウは破棄せず再表示できるようにする (録音はバックグラウンドで継続)。
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
     }
 }
 
