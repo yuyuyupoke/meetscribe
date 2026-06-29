@@ -60,6 +60,10 @@ final class AudioSession {
     private var sysPipeline: TranscriptionPipeline?
     private var silenceDetector: SilenceDetector?
 
+    /// クライアント側ノイズフィルタ。環境音・機械音を OpenAI に送る前に除去する。
+    private let micPreProcessor = AudioPreProcessor(config: .microphone, label: "mic-pre")
+    private let sysPreProcessor = AudioPreProcessor(config: .systemAudio, label: "sys-pre")
+
     /// 再接続中の Task。多重再接続を防ぐためストリームごとに 1 本だけ保持。
     private var micReconnectTask: Task<Void, Never>?
     private var sysReconnectTask: Task<Void, Never>?

@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: FloatingPanel?
     private var statusItem: NSStatusItem?
     private var statusTimer: Timer?
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         let contentView = ContentView()
         let hostingController = NSHostingController(rootView: contentView)
 
@@ -243,7 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[SMOKE] ✅ Phase 5 save flow passed")
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) {
+    public func applicationDidBecomeActive(_ notification: Notification) {
         // 権限再チェックは throttle 版で。SCShareableContent を毎フォーカス時に
         // 叩くと CPU/バッテリーを食うため、既に granted なら 30秒は再確認しない。
         Task { @MainActor in
@@ -252,13 +252,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // メニューバー常駐のため、ウィンドウを閉じてもアプリは終了しない。
         // 終了はメニューバーの「MeetScribe を終了」から。
         false
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {
         // 共有オーディオリソース (Voice Processing IO / SCStream) を同期解放する。
         // これを怠ると coreaudiod に孤児リソースが残り、終了後に Mac 全体の
         // オーディオ HAL がブロックしてフリーズする。録音中の終了でも安全に。
@@ -272,14 +272,14 @@ extension AppDelegate: NSWindowDelegate {
     /// ×ボタン = アプリ終了。applicationWillTerminate → shutdownSync で録音と
     /// 画面共有 (ScreenCaptureKit / SCStream) を停止してから終了する。
     /// 「隠す」のではなく「終了」する (ウィンドウを残したいときは −ボタンで最小化)。
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
         NSApp.terminate(nil)
         return false
     }
 }
 
 extension AppDelegate: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
+    public func menuWillOpen(_ menu: NSMenu) {
         // 録音状態に応じてメニュー項目のラベル/有効状態を更新
         guard let rec = menu.item(withTag: 100) else { return }
         let state = AppState.shared

@@ -280,12 +280,12 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                         ],
                         "turn_detection": [
                             "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500
+                            "threshold": 0.75,
+                            "prefix_padding_ms": 200,
+                            "silence_duration_ms": 700
                         ],
                         "noise_reduction": [
-                            "type": "near_field"
+                            "type": "far_field"
                         ]
                     ]
                 ],
@@ -423,6 +423,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         case "conversation.item.input_audio_transcription.completed":
             if let transcript = obj["transcript"] as? String,
                let itemId = obj["item_id"] as? String {
+                // ハルシネーション定型文フィルター
+                if HallucinationFilter.shouldFilter(transcript) {
+                    DebugLog.log("[\(speaker.rawValue)] hallucination filtered: '\(transcript)'")
+                    break
+                }
                 DebugLog.log("[\(speaker.rawValue)] completed: '\(transcript)'")
                 let speaker = self.speaker
                 Task { @MainActor in

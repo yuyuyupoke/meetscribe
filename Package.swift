@@ -10,9 +10,19 @@ let package = Package(
         .executable(name: "MeetScribe", targets: ["MeetScribe"])
     ],
     targets: [
+        .target(
+            name: "MeetScribeCore",
+            path: "Sources/MeetScribe"
+        ),
         .executableTarget(
             name: "MeetScribe",
-            path: "Sources/MeetScribe"
+            dependencies: ["MeetScribeCore"],
+            path: "Sources/MeetScribeApp"
+        ),
+        .testTarget(
+            name: "MeetScribeTests",
+            dependencies: ["MeetScribeCore"],
+            path: "Tests/MeetScribeTests"
         )
     ]
 )
