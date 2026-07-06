@@ -38,6 +38,22 @@ enum ErrorMessageHumanizer {
         return recoverable.contains(type)
     }
 
+    /// OpenAI Realtime API の `error` イベント (`error.type` / `error.code`) を
+    /// 具体的な日本語メッセージに変換する。WebSocket ハンドシェイクは APIキーが
+    /// 無効でも 101 Switching Protocols で成功し、接続直後の最初のメッセージとして
+    /// このイベントが届く (`{"type":"error","error":{"type":"invalid_request_error",
+    /// "code":"invalid_api_key",...}}`) ため、`error` イベント側で判定する必要がある。
+    /// 該当パターンが無ければ OpenAI 側の原文メッセージをそのまま返す。
+    static func humanizeAPIError(type: String?, code: String?, message: String) -> String {
+        if code == "invalid_api_key" || type == "authentication_error" {
+            return "OpenAI APIキーが正しくない、または権限がありません。設定画面でキーを確認してください"
+        }
+        if code == "insufficient_quota" || code == "billing_hard_limit_reached" {
+            return "OpenAIの利用上限に達しています。アカウントの請求設定を確認してください"
+        }
+        return message
+    }
+
     private static func humanizeURLError(_ err: URLError) -> String {
         switch err.code {
         case .timedOut:

@@ -21,11 +21,17 @@ enum SpeakerLabel: String, Codable, Sendable {
 enum TranscriptionClientError: Error, LocalizedError {
     case connectionTimeout
     case sessionNotEstablished
+    /// OpenAI Realtime API が `error` イベントで返した拒否理由。
+    /// WebSocket ハンドシェイク自体は APIキーが無効でも 101 で成功し、
+    /// 接続後の最初のメッセージとしてこのイベントが届く。
+    case apiError(type: String?, code: String?, message: String)
 
     var errorDescription: String? {
         switch self {
         case .connectionTimeout: return "OpenAI Realtime API 接続タイムアウト"
         case .sessionNotEstablished: return "セッション未確立"
+        case .apiError(let type, let code, let message):
+            return ErrorMessageHumanizer.humanizeAPIError(type: type, code: code, message: message)
         }
     }
 }
@@ -579,10 +585,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
             }
             let recoverable = ErrorMessageHumanizer.isRecoverableAPIErrorType(errType)
             DebugLog.log("[\(speaker.rawValue)] API error type=\(errType ?? "?") recoverable=\(recoverable) msg=\(errMsg)")
-            resumeConnectionContinuation(with: .failure(TranscriptionClientError.sessionNotEstablished))
+            let humanMsg = ErrorMessageHumanizer.humanizeAPIError(type: errType, code: errCode, message: errMsg)
+            resumeConnectionContinuation(with: .failure(TranscriptionClientError.apiError(type: errType, code: errCode, message: errMsg)))
             let speaker = self.speaker
             Task { @MainActor in
-                AppState.shared.lastError = "[\(speaker.displayName)] APIエラー: \(errMsg)"
+                AppState.shared.lastError = "[\(speaker.displayName)] APIエラー: \(humanMsg)"
             }
             if recoverable {
                 // セッション復旧見込みあり → 切断して再接続フローに乗せる

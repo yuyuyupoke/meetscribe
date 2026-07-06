@@ -34,12 +34,17 @@ codesign --verify --deep --strict "$APP_DIR" || {
     exit 1
 }
 
-echo "==> [3/5] DMG 作成"
+echo "==> [3/5] DMG 作成 (install.command 同梱)"
 DMG_PATH="$ARTIFACTS_DIR/MeetScribe-$VERSION.dmg"
 rm -f "$DMG_PATH"
+DMG_STAGING_DIR="$(mktemp -d)"
+trap 'rm -rf "$DMG_STAGING_DIR"' EXIT
+cp -R "$APP_DIR" "$DMG_STAGING_DIR/${APP_NAME}.app"
+cp "$PROJECT_DIR/scripts/install.command" "$DMG_STAGING_DIR/install.command"
+chmod +x "$DMG_STAGING_DIR/install.command"
 hdiutil create \
     -volname "$APP_NAME" \
-    -srcfolder "$APP_DIR" \
+    -srcfolder "$DMG_STAGING_DIR" \
     -ov -format UDZO \
     "$DMG_PATH" >/dev/null
 echo "    → $DMG_PATH ($(du -h "$DMG_PATH" | cut -f1))"

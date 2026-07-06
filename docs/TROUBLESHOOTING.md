@@ -2,7 +2,7 @@
 
 ## アプリを開けません — 開発元が未確認
 
-アドホック署名により初回起動時に Gatekeeper が作動する。
+アドホック署名により初回起動時に Gatekeeper が作動する。DMG内の `install.command` をダブルクリックすれば自動で解消するが、それでも開けない場合は手動で以下を実行する。
 
 ```bash
 xattr -cr "/Applications/MeetScribe.app"
@@ -16,7 +16,7 @@ OpenAI Realtime API Beta エンドポイントは廃止済み。最新リリー�
 
 ## "claude CLI not found" エラーが出る
 
-Q&A 機能には Claude Code が `$PATH` 上で利用可能な状態でインストールされている必要がある。
+会議タイトルの自動生成には Claude Code が `$PATH` 上で利用可能な状態でインストールされている必要がある（無くてもクラッシュせず、タイムスタンプ名で保存される）。
 
 ```bash
 which claude
@@ -38,6 +38,13 @@ Voice Processing で抑制されるはずだが、一部の Bluetooth ヘッド�
 
 - 可能であれば有線ヘッドホンを使用する
 - 出力音量を下げる。AEC は中程度の音量で最も効果的に動作する
+
+## 証明書セットアップで openssl の -legacy 関連エラーが出る
+
+`-legacy` は OpenSSL 3.x のオプションで、LibreSSL（macOS 標準）や OpenSSL 1.x には存在しない。
+
+- `scripts/setup-signing.sh` は `openssl pkcs12 -help` の出力を見て対応時のみ `-legacy` を付与するため、通常は再実行するだけで解消する
+- それでも失敗する場合は `openssl version` を確認し、`brew install openssl@3` で OpenSSL 3.x を導入、`PATH` を通してから再実行する
 
 ## 全設定をリセットする
 

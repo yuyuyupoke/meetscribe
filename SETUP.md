@@ -16,8 +16,9 @@
 
 MeetScribe は次の構成で動作する macOS ネイティブアプリです。
 
-- **文字起こし**: OpenAI Realtime API (`gpt-4o-transcribe`) — OpenAI API キーが必要（有料）
-- **会議中 Q&A**: Claude Code CLI (`claude -p`) — Claude の Pro / Max サブスクリプション推奨
+- **文字起こし**: OpenAI Realtime API (`gpt-realtime-whisper`) — OpenAI API キーが必要（有料）
+- **整形・翻訳・Copilot パネル**: `gpt-4.1-mini`（同じ OpenAI API キーを使用）— 確定セグメントのフィラー除去・対訳、Catchup 要約、会議全体像の自動更新を行う
+- **会議タイトルの自動生成**: Claude Code CLI (`claude -p`) — Claude の Pro / Max サブスクリプション推奨。録音停止時にのみ使用
 - **システム音声の取得**: ScreenCaptureKit（macOS 標準）
 
 > **重要**: BlackHole などの仮想オーディオデバイスは **不要** です。
@@ -25,8 +26,8 @@ MeetScribe は次の構成で動作する macOS ネイティブアプリです�
 > 設定は要りません。古い記事で BlackHole + Multi-Output Device の設定を求めるものが
 > ありますが、本アプリ（ScreenCaptureKit 版）には当てはまりません。
 
-> **注意（規約）**: Q&A 機能はユーザー自身の Claude サブスクリプションを Claude Code CLI
-> 経由で使用します。[Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms)
+> **注意（規約）**: 会議タイトル生成機能はユーザー自身の Claude サブスクリプションを
+> Claude Code CLI 経由で使用します。[Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms)
 > を確認の上、自己責任でご利用ください。MeetScribe は Anthropic / OpenAI とは無関係の
 > 非公式プロジェクトです。
 
@@ -43,15 +44,22 @@ sw_vers
 # Swift toolchain（Xcode Command Line Tools）があるか
 swift --version || xcode-select --install
 
-# claude CLI があるか（Q&A 機能に必要。なければ Q&A のみ使えない）
+# claude CLI があるか（会議タイトル自動生成に使う。なければタイムスタンプ名にフォールバック）
 which claude
+
+# openssl のバージョン（コード署名用証明書の作成に使う）
+openssl version
 ```
 
 - `sw_vers` の `ProductVersion` が **14 以上**であること。13 以下なら動作しません。
 - `swift --version` が失敗する場合は `xcode-select --install` をユーザーに実行してもらう。
-- `claude` が見つからない場合は、Q&A 機能を使うなら
+- `claude` が見つからない場合は、会議タイトルの自動生成を使うなら
   [Claude Code 公式手順](https://docs.claude.com/en/docs/claude-code/quickstart) に従って
-  インストールするようユーザーに案内する（文字起こし・議事録保存だけなら不要）。
+  インストールするようユーザーに案内する（無くてもクラッシュせず、タイムスタンプ名で保存される）。
+- `openssl version` は OpenSSL 3.x 以外（LibreSSL 等、macOS 標準のもの）でも動作します。
+  `scripts/setup-signing.sh` が自動でバージョンに応じたオプションを選択します。万一
+  証明書の p12 作成でエラーが出た場合は、`brew install openssl@3` で OpenSSL 3.x を導入し、
+  `PATH` を通してから再実行してください。
 
 ---
 
@@ -64,9 +72,12 @@ which claude
 3. **「Create new secret key」** をクリックし、名前（例: `meetscribe`）を付けて作成。
 4. 表示された `sk-proj-...` で始まるキーをコピーして控える（**この画面を閉じると再表示されない**）。
 5. [platform.openai.com/settings/organization/billing](https://platform.openai.com/settings/organization/billing)
-   で支払い方法を登録し、`gpt-4o-transcribe` を利用できる残高があることを確認する。
+   で支払い方法を登録し、`gpt-realtime-whisper` と `gpt-4.1-mini` を利用できる残高があることを確認する。
+   同じキーを文字起こし・セグメント整形/対訳・Copilot パネル（Catchup 要約・全体像自動更新）すべてで使う。
 
-> コスト目安: 会議 1 時間あたり約 $0.7（マイク + システム音の 2 ストリーム並列）。
+> コスト目安: 文字起こし単体で会議 1 時間あたり約 $0.7（マイク + システム音の 2 ストリーム並列）。
+> これに加え、整形・翻訳と Copilot パネルの利用分だけ `gpt-4.1-mini` の追加費用
+> （$0.40/M 入力・$1.60/M 出力）が発生する。
 
 取得したキーは後のステップ 5 でアプリに設定します。AI はキーの値をログや
 ファイルに書き出さないでください（Keychain にのみ保存します）。
@@ -130,11 +141,10 @@ open "/Applications/MeetScribe.app"
 セットアップ画面で以下を設定します（すべて完了すると画面は自動で折り畳まれます）。
 
 1. **OpenAI API Key** — ステップ 1 で取得した `sk-proj-...` を入力して「保存」。
-   Keychain に暗号化保存されます。
+   Keychain に暗号化保存されます。文字起こしと Copilot パネル（整形/対訳・Catchup 要約・
+   全体像自動更新）の両方がこのキーを使います。
 2. **議事録の保存先（必須）** — 「選択」で録音停止時に議事録 Markdown を書き出す
    フォルダを指定。**未設定だと録音を開始できません**。
-3. **知識源フォルダ（任意）** — Q&A 時に Claude が参照するフォルダ（Obsidian vault や
-   ナレッジ管理ディレクトリなど）。未指定なら Q&A は会議文脈 + Web 検索のみで回答します。
 
 ---
 

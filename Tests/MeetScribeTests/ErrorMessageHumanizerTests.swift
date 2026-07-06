@@ -109,4 +109,55 @@ final class ErrorMessageHumanizerTests: XCTestCase {
         XCTAssertFalse(msg.contains("The operation couldn't be completed."))
         XCTAssertTrue(msg.contains("Something went wrong"))
     }
+
+    // MARK: - humanizeAPIError
+
+    func test_humanizeAPIError_invalidApiKeyCode_returnsJapaneseGuidance() {
+        let msg = ErrorMessageHumanizer.humanizeAPIError(
+            type: "invalid_request_error",
+            code: "invalid_api_key",
+            message: "Incorrect API key provided: sk-inval***xxx."
+        )
+        XCTAssertTrue(msg.contains("APIキー"))
+        XCTAssertTrue(msg.contains("設定"))
+    }
+
+    func test_humanizeAPIError_authenticationErrorType_returnsJapaneseGuidance() {
+        let msg = ErrorMessageHumanizer.humanizeAPIError(
+            type: "authentication_error",
+            code: nil,
+            message: "Unauthorized"
+        )
+        XCTAssertTrue(msg.contains("APIキー"))
+    }
+
+    func test_humanizeAPIError_insufficientQuota_returnsJapaneseGuidance() {
+        let msg = ErrorMessageHumanizer.humanizeAPIError(
+            type: "insufficient_quota",
+            code: "insufficient_quota",
+            message: "You exceeded your current quota"
+        )
+        XCTAssertTrue(msg.contains("利用上限"))
+    }
+
+    func test_humanizeAPIError_unknownCode_returnsOriginalMessage() {
+        let msg = ErrorMessageHumanizer.humanizeAPIError(
+            type: "invalid_request_error",
+            code: "some_other_code",
+            message: "some raw message"
+        )
+        XCTAssertEqual(msg, "some raw message")
+    }
+
+    // MARK: - TranscriptionClientError.apiError
+
+    func test_humanize_apiError_invalidApiKey_returnsJapaneseGuidance() {
+        let error = TranscriptionClientError.apiError(
+            type: "invalid_request_error",
+            code: "invalid_api_key",
+            message: "Incorrect API key provided."
+        )
+        let msg = ErrorMessageHumanizer.humanize(error)
+        XCTAssertTrue(msg.contains("APIキー"))
+    }
 }

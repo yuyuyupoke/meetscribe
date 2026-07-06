@@ -3,7 +3,7 @@
 <!--
   MeetScribe LaunchAgent
 
-  Install (paths assume ~/Applications/Scribe\ Listen.app の場合):
+  Install (MeetScribe.app が /Applications にインストールされている前提):
     1. このファイル内 $HOME を実パスに置換 (plist は変数展開不可)。
        sed "s|\$HOME|$HOME|g" config/com.meetscribe.agent.plist > /tmp/com.meetscribe.agent.plist
     2. cp /tmp/com.meetscribe.agent.plist ~/Library/LaunchAgents/
@@ -23,7 +23,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>$HOME/Applications/MeetScribe.app/Contents/MacOS/MeetScribe</string>
+        <string>/Applications/MeetScribe.app/Contents/MacOS/MeetScribe</string>
     </array>
 
     <key>EnvironmentVariables</key>

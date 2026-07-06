@@ -41,8 +41,22 @@ CONF
 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
     -days 3650 -nodes -config openssl.cnf 2>/dev/null
 
-openssl pkcs12 -export -inkey key.pem -in cert.pem -out identity.p12 \
-    -name "$CERT_NAME" -passout pass:changeit -legacy
+# -legacy は OpenSSL 3.x のフラグ。LibreSSL（macOS標準）やOpenSSL 1.x には存在せず、
+# 付けるとエラーになるため、pkcs12 -help の出力を見て対応時のみ付与する。
+LEGACY_FLAG=""
+if openssl pkcs12 -help 2>&1 | grep -q -- "-legacy"; then
+    LEGACY_FLAG="-legacy"
+fi
+
+if ! openssl pkcs12 -export -inkey key.pem -in cert.pem -out identity.p12 \
+    -name "$CERT_NAME" -passout pass:changeit $LEGACY_FLAG; then
+    echo ""
+    echo "❌ p12 の作成に失敗しました（openssl バージョン: $(openssl version)）"
+    echo "   Homebrew の openssl@3 のインストールを検討してください:"
+    echo "     brew install openssl@3"
+    echo "     export PATH=\"\$(brew --prefix openssl@3)/bin:\$PATH\""
+    exit 1
+fi
 
 echo "==> Importing identity to login keychain"
 security import identity.p12 -k "$KEYCHAIN" \
