@@ -6,18 +6,23 @@ final class NoiseGateTests: XCTestCase {
 
     // MARK: - Default Config
 
+    // 期待値は NoiseGate.swift の設計値に一致させる:
+    // マイクは Voice Processing (AGC+NS) 後の低レベル信号に合わせ緩め (-55/-60)、
+    // システム音はさらに緩め (-60/-65)。いずれも 5dB のヒステリシス幅。
     func test_microphoneConfig_hasCorrectDefaults() {
         let config = NoiseGate.Config.microphone
-        XCTAssertEqual(config.openThresholdDB, -40.0)
-        XCTAssertEqual(config.closeThresholdDB, -45.0)
+        XCTAssertEqual(config.openThresholdDB, -55.0)
+        XCTAssertEqual(config.closeThresholdDB, -60.0)
         XCTAssertGreaterThan(config.openThresholdDB, config.closeThresholdDB,
                              "Open threshold must be higher than close for hysteresis")
     }
 
     func test_systemAudioConfig_hasCorrectDefaults() {
         let config = NoiseGate.Config.systemAudio
-        XCTAssertEqual(config.openThresholdDB, -50.0)
-        XCTAssertEqual(config.closeThresholdDB, -55.0)
+        XCTAssertEqual(config.openThresholdDB, -60.0)
+        XCTAssertEqual(config.closeThresholdDB, -65.0)
+        XCTAssertGreaterThan(config.openThresholdDB, config.closeThresholdDB,
+                             "Open threshold must be higher than close for hysteresis")
     }
 
     // MARK: - Initial state

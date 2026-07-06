@@ -18,8 +18,17 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
     private var bufferHandler: BufferHandler?
     private(set) var isRunning = false
 
+    /// SCStream が OS 都合で予期せず停止したときに呼ばれる (画面ロック解除失敗、
+    /// 外部ディスプレイ切断、画面収録権限の失効等)。AudioSession がここで
+    /// クリーンアップと状態更新を一括で行う。delegate から AppState.captureStatus を
+    /// 直接書き換えてはいけない — AudioSession 内部状態と不整合になり、録音中に
+    /// 停止ボタンも Kill も消えてマイクだけ回り続ける「詰み」になる。
+    var onUnexpectedStop: (@Sendable (String) -> Void)?
+
     func start(onBuffer: BufferHandler? = nil) async throws {
-        guard !isRunning else { return }
+        // 既に動いている場合は畳んでから開始する (早期 return すると新しい
+        // bufferHandler への差し替えがスキップされ、音声が旧パイプラインに流れ続ける)。
+        if isRunning { await stop() }
         bufferHandler = onBuffer
 
         let shareableContent = try await SCShareableContent.excludingDesktopWindows(
@@ -101,9 +110,20 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
 
 extension SystemAudioCapture: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        Task { @MainActor in
-            AppState.shared.lastError = "System audio stream stopped: \(error.localizedDescription)"
-            AppState.shared.captureStatus = .error(error.localizedDescription)
+        DebugLog.log("[sys] SCStream stopped unexpectedly: \(error.localizedDescription)")
+        // delegate キューから直接プロパティを書き換えると、MainActor 側の
+        // start()/stop()/tearDown() と競合してデータレース (ARC over-release) に
+        // なるため、start/stop と同じ MainActor 隔離に跳ばしてから畳む。
+        // 順序が入れ替わっても stop() 側の isRunning ガードで安全。
+        let reason = error.localizedDescription
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.stream = nil
+            self.streamOutput = nil
+            self.bufferHandler = nil
+            self.isRunning = false
+            // captureStatus の書き換えは AudioSession の一本化された停止経路に任せる。
+            self.onUnexpectedStop?(reason)
         }
     }
 }

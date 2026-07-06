@@ -75,26 +75,45 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertTrue(store.entries[0].isFinal)
     }
 
-    // MARK: - meetingEntries / qaEntries filters
+    // MARK: - updateFinalText (GPT-4.1 mini 整形反映)
+
+    func test_updateFinalText_replacesTextKeepingFinal() {
+        store.completeItem(itemId: "item-1", finalText: "えーと、今日はあの、会議です", speaker: .me)
+        store.updateFinalText(itemId: "item-1", text: "今日は会議です")
+
+        XCTAssertEqual(store.entries.count, 1)
+        XCTAssertEqual(store.entries[0].text, "今日は会議です")
+        XCTAssertTrue(store.entries[0].isFinal)
+    }
+
+    func test_updateFinalText_nonexistentId_doesNothing() {
+        store.updateFinalText(itemId: "ghost", text: "text")
+        XCTAssertTrue(store.entries.isEmpty)
+    }
+
+    func test_updateFinalText_withTranslation_setsTranslation() {
+        store.completeItem(itemId: "item-1", finalText: "Let's start.", speaker: .other)
+        store.updateFinalText(itemId: "item-1", text: "Let's start.", translation: "始めましょう。")
+
+        XCTAssertEqual(store.entries[0].text, "Let's start.")
+        XCTAssertEqual(store.entries[0].translation, "始めましょう。")
+    }
+
+    func test_updateFinalText_withoutTranslation_clearsTranslation() {
+        store.completeItem(itemId: "item-1", finalText: "こんにちは", speaker: .me)
+        store.updateFinalText(itemId: "item-1", text: "こんにちは", translation: nil)
+
+        XCTAssertNil(store.entries[0].translation)
+    }
+
+    // MARK: - meetingEntries filter
 
     func test_meetingEntries_onlyMeAndOther() {
         store.appendDelta("me", itemId: "1", speaker: .me)
         store.appendDelta("other", itemId: "2", speaker: .other)
-        store.addUserQuery("question")
-        let _ = store.startClaudeAnswer()
 
         XCTAssertEqual(store.meetingEntries.count, 2)
         XCTAssertTrue(store.meetingEntries.allSatisfy { $0.speaker == .me || $0.speaker == .other })
-    }
-
-    func test_qaEntries_onlyUserAndClaude() {
-        store.appendDelta("me", itemId: "1", speaker: .me)
-        store.addUserQuery("question")
-        let answerId = store.startClaudeAnswer()
-        store.appendToAnswer(itemId: answerId, chunk: "answer")
-
-        XCTAssertEqual(store.qaEntries.count, 2)
-        XCTAssertTrue(store.qaEntries.allSatisfy { $0.speaker == .user || $0.speaker == .claude })
     }
 
     // MARK: - clear
@@ -102,50 +121,10 @@ final class TranscriptStoreTests: XCTestCase {
     func test_clear_removesAllEntries() {
         store.appendDelta("a", itemId: "1", speaker: .me)
         store.appendDelta("b", itemId: "2", speaker: .other)
-        store.addUserQuery("q")
         XCTAssertFalse(store.entries.isEmpty)
 
         store.clear()
         XCTAssertTrue(store.entries.isEmpty)
-    }
-
-    // MARK: - Q&A operations
-
-    func test_addUserQuery_createsEntryWithCorrectSpeaker() {
-        let id = store.addUserQuery("What is this?")
-
-        XCTAssertEqual(store.entries.count, 1)
-        XCTAssertTrue(id.hasPrefix("qa-user-"))
-        XCTAssertEqual(store.entries[0].speaker, .user)
-        XCTAssertEqual(store.entries[0].text, "What is this?")
-        XCTAssertTrue(store.entries[0].isFinal)
-    }
-
-    func test_startClaudeAnswer_createsEmptyEntry() {
-        let id = store.startClaudeAnswer()
-
-        XCTAssertEqual(store.entries.count, 1)
-        XCTAssertTrue(id.hasPrefix("qa-claude-"))
-        XCTAssertEqual(store.entries[0].speaker, .claude)
-        XCTAssertEqual(store.entries[0].text, "")
-        XCTAssertFalse(store.entries[0].isFinal)
-    }
-
-    func test_appendToAnswer_appendsChunks() {
-        let id = store.startClaudeAnswer()
-        store.appendToAnswer(itemId: id, chunk: "Hello ")
-        store.appendToAnswer(itemId: id, chunk: "world")
-
-        XCTAssertEqual(store.entries[0].text, "Hello world")
-    }
-
-    func test_finalizeAnswer_setsIsFinal() {
-        let id = store.startClaudeAnswer()
-        store.appendToAnswer(itemId: id, chunk: "done")
-        XCTAssertFalse(store.entries[0].isFinal)
-
-        store.finalizeAnswer(itemId: id)
-        XCTAssertTrue(store.entries[0].isFinal)
     }
 
     // MARK: - meetingTranscriptText
@@ -159,26 +138,7 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertTrue(text.contains("[相手] よろしく"))
     }
 
-    func test_meetingTranscriptText_excludesQA() {
-        store.completeItem(itemId: "1", finalText: "hello", speaker: .me)
-        store.addUserQuery("question")
-
-        let text = store.meetingTranscriptText
-        XCTAssertTrue(text.contains("hello"))
-        XCTAssertFalse(text.contains("question"))
-    }
-
     // MARK: - Edge cases
-
-    func test_appendToAnswer_nonexistentId_doesNothing() {
-        store.appendToAnswer(itemId: "nonexistent", chunk: "text")
-        XCTAssertTrue(store.entries.isEmpty)
-    }
-
-    func test_finalizeAnswer_nonexistentId_doesNothing() {
-        store.finalizeAnswer(itemId: "nonexistent")
-        XCTAssertTrue(store.entries.isEmpty)
-    }
 
     func test_appendDelta_emptyString_appendsEmpty() {
         store.appendDelta("", itemId: "1", speaker: .me)

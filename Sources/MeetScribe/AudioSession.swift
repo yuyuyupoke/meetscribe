@@ -68,6 +68,11 @@ final class AudioSession {
     private var micReconnectTask: Task<Void, Never>?
     private var sysReconnectTask: Task<Void, Never>?
 
+    /// 現セッションの文字起こし言語。start() 時の設定値を固定し、録音中に
+    /// 設定を変えても再接続ストリームだけ言語が変わる不整合を防ぐ
+    /// (UI の「次回の録音開始から適用」との一貫性)。
+    private var activeLanguage: String?
+
     private init() {}
 
     // MARK: - 自動再接続
@@ -97,8 +102,10 @@ final class AudioSession {
             return
         }
 
-        let micClient = TranscriptionClient(apiKey: apiKey, speaker: .me)
-        let sysClient = TranscriptionClient(apiKey: apiKey, speaker: .other)
+        let language = AppState.shared.transcriptionLanguageCode
+        self.activeLanguage = language
+        let micClient = TranscriptionClient(apiKey: apiKey, speaker: .me, language: language)
+        let sysClient = TranscriptionClient(apiKey: apiKey, speaker: .other, language: language)
         do {
             async let micConnect: Void = micClient.connect()
             async let sysConnect: Void = sysClient.connect()
@@ -123,6 +130,19 @@ final class AudioSession {
         wireUnexpectedClose(client: micClient, speaker: .me)
         wireUnexpectedClose(client: sysClient, speaker: .other)
 
+        // SCStream が OS 都合で停止したら (画面ロック・権限失効等)、録音全体を
+        // 安全に終了して議事録を保存する (無音タイムアウトと同じ扱い)。
+        // delegate が captureStatus を直接 .error にすると停止ボタンも Kill も
+        // 消えてマイクだけ回り続ける詰みになるため、必ず stop() 経路に流す。
+        systemAudio.onUnexpectedStop = { [weak self] reason in
+            Task { @MainActor [weak self] in
+                guard let self, AppState.shared.isRunning else { return }
+                AppState.shared.lastError =
+                    "システム音声が停止しました (\(reason))。録音を終了して議事録を保存します。"
+                await self.stop()
+            }
+        }
+
         do {
             try microphone.start { [micPipeline] buffer, _ in
                 micPipeline.process(.pcm(buffer))
@@ -145,8 +165,9 @@ final class AudioSession {
             return
         }
 
-        // 会議開始時刻をマーク + 無音検知タイマー起動 (10分)
+        // 会議開始時刻をマーク + Copilot (全体像の自動更新) 開始 + 無音検知タイマー起動 (10分)
         AppState.shared.meetingStartedAt = Date()
+        CopilotController.shared.startSession()
         let detector = SilenceDetector(timeoutMinutes: 10.0) { [weak self] in
             DebugLog.log("[MeetScribe] silence timeout → auto-stop")
             Task { await self?.stop() }
@@ -160,11 +181,19 @@ final class AudioSession {
     // MARK: - Stop (正常終了: 議事録を保存)
 
     func stop() async {
+        // 再入ガード: stop() の呼び出し元は3系統ある (ユーザー操作 / 無音タイムアウト /
+        // SCStream異常停止)。保存フロー (~15秒) の suspension 中に別系統から重なると
+        // runSaveFlow が二重実行され議事録が2重保存されるため、.running 以外は弾く。
+        guard AppState.shared.captureStatus == .running else {
+            DebugLog.log("[MeetScribe] AudioSession.stop() ignored (status != running)")
+            return
+        }
         DebugLog.log("[MeetScribe] AudioSession.stop() - with save")
         AppState.shared.captureStatus = .stopping
 
         let startedAt = AppState.shared.meetingStartedAt
         let endedAt = Date()
+        CopilotController.shared.endSession()
         microphone.stop()
         await systemAudio.stop()
         silenceDetector?.stop()
@@ -191,6 +220,7 @@ final class AudioSession {
     func kill() async {
         DebugLog.log("[MeetScribe] AudioSession.kill() - no save")
         AppState.shared.captureStatus = .stopping
+        CopilotController.shared.endSession()
         microphone.stop()
         await systemAudio.stop()
         silenceDetector?.stop()
@@ -213,6 +243,7 @@ final class AudioSession {
     /// これを怠ると coreaudiod に孤児リソースが残り Mac 全体がフリーズする。
     func shutdownSync() {
         DebugLog.log("[MeetScribe] AudioSession.shutdownSync()")
+        CopilotController.shared.endSession()
         microphone.stop()        // VPIO を同期解放
         systemAudio.stopSync()   // SCStream をベストエフォート停止
         silenceDetector?.stop()
@@ -237,15 +268,20 @@ final class AudioSession {
         let title = await MeetingTitleGenerator.generate(from: transcriptText)
         DebugLog.log("[MeetScribe] generated title: \(title)")
 
-        // 2. レコード組み立て + 保存
+        // 2. レコード組み立て + 保存。
+        // タイトル生成 (~15秒) の間に GPT-4.1 mini の整形結果が届くことがあるため、
+        // 引数のスナップショットではなく store から最新エントリを取り直す。
+        // (店じまい後に clear はされないので、録音停止時点の全エントリが残っている)
+        let latestEntries = TranscriptStore.shared.meetingEntries
         let record = MeetingRecord(
             startedAt: startedAt,
             endedAt: endedAt,
             title: title,
-            meetingEntries: meetingEntries,
-            qaEntries: TranscriptStore.shared.qaEntries,
+            meetingEntries: latestEntries.isEmpty ? meetingEntries : latestEntries,
+            overview: AppState.shared.overview,
+            catchupCards: AppState.shared.catchupCards,
             totalCostUSD: AppState.shared.totalCostUSD,
-            model: "gpt-4o-transcribe"
+            model: TranscriptionClient.transcriptionModel
         )
         do {
             let url = try TranscriptExporter.save(record, to: AppState.shared.meetingsSaveDirectoryURL)
@@ -260,6 +296,12 @@ final class AudioSession {
     // MARK: - リソース解放
 
     private func tearDown() {
+        // キャプチャエンジンも必ず停止する (二重 stop は各 isRunning ガードで無害)。
+        // 接続系だけ畳んでマイクが回り続けると、start() 途中失敗時に VPIO が
+        // 孤児化して録りっぱなしになり、captureStatus=.error と合わせて復帰不能になる。
+        microphone.stop()
+        systemAudio.stopSync()
+        systemAudio.onUnexpectedStop = nil
         micReconnectTask?.cancel()
         sysReconnectTask?.cancel()
         micReconnectTask = nil
@@ -332,7 +374,11 @@ final class AudioSession {
             try? await Task.sleep(for: .seconds(delay))
             if Task.isCancelled || !AppState.shared.isRunning { break }
 
-            let newClient = TranscriptionClient(apiKey: apiKey, speaker: speaker)
+            let newClient = TranscriptionClient(
+                apiKey: apiKey,
+                speaker: speaker,
+                language: activeLanguage
+            )
             do {
                 try await newClient.connect()
                 // connect 中に stop/kill が来ていたらゾンビ client を残さず破棄して終了

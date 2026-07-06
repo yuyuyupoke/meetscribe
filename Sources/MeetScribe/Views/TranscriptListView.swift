@@ -15,8 +15,11 @@ struct TranscriptListView: View {
                 placeholder
                 Spacer(minLength: 0)
             } else {
-                TranscriptTextView(entries: transcripts.meetingEntries)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                TranscriptTextView(
+                    entries: transcripts.meetingEntries,
+                    showTranslations: state.showTranslations
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if let error = state.lastError {
                 HStack(alignment: .top, spacing: 6) {

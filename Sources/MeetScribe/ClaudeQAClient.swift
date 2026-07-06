@@ -1,13 +1,14 @@
 import Foundation
 
-/// Claude Max (subscription) の `claude -p` CLI を subprocess で呼び出し、
-/// 会議文字起こしを文脈として、ユーザー指定の知識源フォルダや Web の情報を
-/// 参照しながら質問に答えさせる。
+/// Claude Max (subscription) の `claude -p` CLI を subprocess で呼び出すクライアント。
+/// 現在の用途は議事録タイトル生成 (`invokeRaw`) のみ。
+/// (タイプ入力式 Q&A は 2026-07 の右カラム刷新で廃止した)
 final class ClaudeQAClient: @unchecked Sendable {
     enum QAError: Error, LocalizedError {
         case claudeNotFound
         case processFailed(Int32, String?)
         case cancelled
+        case timedOut(TimeInterval)
 
         var errorDescription: String? {
             switch self {
@@ -17,6 +18,34 @@ final class ClaudeQAClient: @unchecked Sendable {
                 return "claude プロセス異常終了 (code=\(code))" + (detail.map { " — \($0)" } ?? "")
             case .cancelled:
                 return "質問がキャンセルされました"
+            case .timedOut(let seconds):
+                return "claude が \(Int(seconds))秒以内に応答しませんでした (タイムアウト)"
+            }
+        }
+    }
+
+    /// プロセス待ちの上限。claude CLI がハングすると isSavingMeeting が
+    /// 永久に立ちっぱなしになり UI がロックされるため、必ず上限を設ける。
+    static let rawInvokeTimeoutSeconds: TimeInterval = 60 // タイトル生成等の軽量呼び出し
+
+    /// タイムアウト超過でプロセスを強制終了するウォッチドッグを起動する。
+    /// terminate (SIGTERM) で3秒待っても死なない場合は SIGKILL で確殺する。
+    /// 終了すれば terminationHandler が呼ばれるので、呼び出し側の待機は自然に解ける。
+    private static func startWatchdog(
+        for task: Process,
+        timeout: TimeInterval,
+        timedOut: TimedOutFlag
+    ) -> Task<Void, Never> {
+        Task.detached {
+            try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled, task.isRunning else { return }
+            timedOut.set()
+            DebugLog.log("[claude-qa] watchdog: timeout (\(Int(timeout))s) → terminate")
+            task.terminate()
+            try? await Task.sleep(for: .seconds(3))
+            if task.isRunning {
+                DebugLog.log("[claude-qa] watchdog: still alive → SIGKILL")
+                kill(task.processIdentifier, SIGKILL)
             }
         }
     }
@@ -31,100 +60,6 @@ final class ClaudeQAClient: @unchecked Sendable {
         } else {
             throw QAError.claudeNotFound
         }
-    }
-
-    /// 質問を送信し、回答をストリーミングで受け取る。
-    /// - Parameters:
-    ///   - transcript: 会議文字起こし全文 (空文字可)
-    ///   - question: ユーザーの質問
-    ///   - model: 使用するモデル
-    ///   - knowledgeFolderPath: ユーザー指定の知識源フォルダ (任意)。
-    ///     未指定なら Web 情報のみで回答する。
-    ///   - onDelta: 出力チャンクが来るたびに呼ばれる (UI更新用)
-    /// - Returns: 回答全文
-    func ask(
-        transcript: String,
-        question: String,
-        model: ClaudeModel,
-        knowledgeFolderPath: String? = nil,
-        onDelta: @escaping @Sendable (String) -> Void
-    ) async throws -> String {
-        let prompt = buildPrompt(
-            transcript: transcript,
-            question: question,
-            knowledgeFolderPath: knowledgeFolderPath
-        )
-        DebugLog.log("[claude-qa] asking (\(model.cliArgument)): \(question.prefix(60))…")
-
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: claudePath)
-        var args = [
-            "-p", prompt,
-            "--model", model.cliArgument
-        ]
-        if let kf = knowledgeFolderPath {
-            args.append("--add-dir")
-            args.append(kf)
-        }
-        args.append(contentsOf: ["--allowedTools", "Read,Glob,Grep,WebFetch,WebSearch"])
-        task.arguments = args
-
-        // PATH を補正して claude が内部で呼ぶツール類を解決できるようにする
-        var env = ProcessInfo.processInfo.environment
-        let existingPath = env["PATH"] ?? ""
-        env["PATH"] = "\(NSHomeDirectory())/.local/bin:/usr/local/bin:/opt/homebrew/bin:\(existingPath)"
-        task.environment = env
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        task.standardOutput = stdout
-        task.standardError = stderr
-
-        // stdout をストリーミング読み取り
-        let collected = Collected()
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                return
-            }
-            if let chunk = String(data: data, encoding: .utf8), !chunk.isEmpty {
-                collected.append(chunk)
-                onDelta(chunk)
-            }
-        }
-
-        do {
-            try task.run()
-        } catch {
-            throw QAError.processFailed(-1, error.localizedDescription)
-        }
-
-        // プロセス終了を待つ (cancel 対応)
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { cont in
-                task.terminationHandler = { _ in
-                    // readabilityHandler の残りを flush
-                    if let remaining = try? stdout.fileHandleForReading.readToEnd(),
-                       let tail = String(data: remaining, encoding: .utf8),
-                       !tail.isEmpty {
-                        collected.append(tail)
-                        onDelta(tail)
-                    }
-                    cont.resume()
-                }
-            }
-        } onCancel: {
-            task.terminate()
-        }
-
-        if task.terminationStatus != 0 {
-            let errData = (try? stderr.fileHandleForReading.readToEnd()) ?? Data()
-            let errMsg = String(data: errData, encoding: .utf8)
-            throw QAError.processFailed(task.terminationStatus, errMsg)
-        }
-
-        return collected.value
     }
 
     /// 任意プロンプトで claude -p を呼び、標準出力をまとめて返す (ストリーミング無し)。
@@ -153,6 +88,10 @@ final class ClaudeQAClient: @unchecked Sendable {
             throw QAError.processFailed(-1, error.localizedDescription)
         }
 
+        // ハング対策: 上限超過で強制終了するウォッチドッグ
+        let timedOut = TimedOutFlag()
+        let watchdog = Self.startWatchdog(for: task, timeout: Self.rawInvokeTimeoutSeconds, timedOut: timedOut)
+
         await withTaskCancellationHandler {
             await withCheckedContinuation { cont in
                 task.terminationHandler = { _ in cont.resume() }
@@ -160,7 +99,12 @@ final class ClaudeQAClient: @unchecked Sendable {
         } onCancel: {
             task.terminate()
         }
+        watchdog.cancel()
 
+        // timedOut と正常終了の競合時は完走結果を優先 (ask と同じ理由)
+        if timedOut.value && task.terminationStatus != 0 {
+            throw QAError.timedOut(Self.rawInvokeTimeoutSeconds)
+        }
         if task.terminationStatus != 0 {
             let errData = (try? stderr.fileHandleForReading.readToEnd()) ?? Data()
             let errMsg = String(data: errData, encoding: .utf8)
@@ -171,59 +115,15 @@ final class ClaudeQAClient: @unchecked Sendable {
         return String(data: outData, encoding: .utf8) ?? ""
     }
 
-    // MARK: - Prompt 構築
-
-    private func buildPrompt(
-        transcript: String,
-        question: String,
-        knowledgeFolderPath: String? = nil
-    ) -> String {
-        let transcriptBlock: String
-        if transcript.isEmpty {
-            transcriptBlock = "(まだ発話なし)"
-        } else {
-            transcriptBlock = transcript
-        }
-        let knowledgeBlock: String
-        if let kf = knowledgeFolderPath {
-            knowledgeBlock = """
-            参照可能な情報源 (優先順):
-            - **ユーザー指定の知識源フォルダ** (\(kf)) — Glob/Grep/Read で必ず確認して根拠を引く
-            - Web 上の最新情報 (WebSearch / WebFetch 可)
-            """
-        } else {
-            knowledgeBlock = """
-            参照可能な情報源:
-            - Web 上の最新情報 (WebSearch / WebFetch 可)
-            (ローカル知識源フォルダは未設定。会議文脈と Web 情報のみで回答する)
-            """
-        }
-        return """
-        あなたは MeetScribe というミーティング傍聴アシスタントです。
-        ユーザーが参加している会議の文字起こしをリアルタイムで聞いており、
-        質問されたときに的確に答えることが役割です。
-
-        以下は現在進行中の会議のリアルタイム文字起こしです。
-
-        <transcript>
-        \(transcriptBlock)
-        </transcript>
-
-        上記の文脈を踏まえて、以下の質問に答えてください。
-
-        \(knowledgeBlock)
-
-        <question>
-        \(question)
-        </question>
-
-        回答は日本語で、簡潔かつ実用的に。引用元のファイル名は最後に箇条書きで示す。
-        """
-    }
-
     // MARK: - claude 実行バイナリ探索
 
-    private static func discoverClaudeExecutable() -> String? {
+    /// claude CLI がインストールされているか (セットアップ画面のチェックリスト用)。
+    /// `which` フォールバックでプロセスを起動するため、UI からはバックグラウンドで呼ぶこと。
+    static var isClaudeInstalled: Bool {
+        discoverClaudeExecutable() != nil
+    }
+
+    static func discoverClaudeExecutable() -> String? {
         let fm = FileManager.default
         let candidates = [
             "\(NSHomeDirectory())/.local/bin/claude",
@@ -251,18 +151,19 @@ final class ClaudeQAClient: @unchecked Sendable {
     }
 }
 
-/// ストリーミング読み取り中に蓄積するためのシンプルなロック付きバッファ。
-private final class Collected: @unchecked Sendable {
+/// ウォッチドッグがタイムアウトで terminate したことを伝えるロック付きフラグ。
+private final class TimedOutFlag: @unchecked Sendable {
     private let lock = NSLock()
-    private var buffer = ""
+    private var flag = false
 
-    func append(_ s: String) {
+    func set() {
         lock.lock(); defer { lock.unlock() }
-        buffer += s
+        flag = true
     }
 
-    var value: String {
+    var value: Bool {
         lock.lock(); defer { lock.unlock() }
-        return buffer
+        return flag
     }
 }
+

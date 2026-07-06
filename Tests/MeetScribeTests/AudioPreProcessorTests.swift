@@ -6,9 +6,11 @@ final class AudioPreProcessorTests: XCTestCase {
 
     // MARK: - Config
 
-    func test_microphoneConfig_enablesSpectral() {
+    /// マイク側の spectral 解析は意図的に無効 (コミット 504aa34:
+    /// "disabled in pipeline — client-side filtering caused more harm than good")。
+    func test_microphoneConfig_disablesSpectral() {
         let config = AudioPreProcessor.Config.microphone
-        XCTAssertTrue(config.enableSpectralAnalysis)
+        XCTAssertFalse(config.enableSpectralAnalysis)
     }
 
     func test_systemAudioConfig_enablesSpectral() {

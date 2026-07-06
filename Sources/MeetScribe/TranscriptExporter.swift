@@ -6,9 +6,32 @@ struct MeetingRecord: Sendable {
     let endedAt: Date
     let title: String
     let meetingEntries: [TranscriptEntry]
-    let qaEntries: [TranscriptEntry]
+    /// AIが傍聴して生成した最終版の全体像 (nil = 生成前に終了)
+    let overview: MeetingOverview?
+    /// セッション中に実行した Catchup 要約 (新しい順で保持されている)
+    let catchupCards: [CatchupCard]
     let totalCostUSD: Double
     let model: String
+
+    init(
+        startedAt: Date,
+        endedAt: Date,
+        title: String,
+        meetingEntries: [TranscriptEntry],
+        overview: MeetingOverview? = nil,
+        catchupCards: [CatchupCard] = [],
+        totalCostUSD: Double,
+        model: String
+    ) {
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.title = title
+        self.meetingEntries = meetingEntries
+        self.overview = overview
+        self.catchupCards = catchupCards
+        self.totalCostUSD = totalCostUSD
+        self.model = model
+    }
 
     var durationMinutes: Int {
         max(1, Int(endedAt.timeIntervalSince(startedAt) / 60))
@@ -65,6 +88,24 @@ enum TranscriptExporter {
         lines.append("")
         lines.append("# \(record.title)")
         lines.append("")
+
+        // 全体像 (AIの傍聴サマリ) を冒頭に
+        if let overview = record.overview {
+            lines.append("## 🧭 全体像")
+            lines.append("")
+            lines.append("- **目的**: \(overview.purpose)")
+            if !overview.agenda.isEmpty {
+                lines.append("- **議題**:")
+                for item in overview.agenda {
+                    lines.append("  - \(item)")
+                }
+            }
+            if !overview.currentTopic.isEmpty {
+                lines.append("- **終了時点の話題**: \(overview.currentTopic)")
+            }
+            lines.append("")
+        }
+
         lines.append("## 📝 文字起こし")
         lines.append("")
         if record.meetingEntries.isEmpty {
@@ -72,40 +113,32 @@ enum TranscriptExporter {
         } else {
             for entry in record.meetingEntries {
                 lines.append("**[\(entry.speaker.displayName)]** \(entry.text)")
+                // 対訳 (英語セグメントのみ) は引用行で直下に
+                if let translation = entry.translation, !translation.isEmpty {
+                    lines.append("> 訳: \(translation)")
+                }
                 lines.append("")
             }
         }
 
-        if !record.qaEntries.isEmpty {
+        // Catchup 履歴 (実行時系列 = 古い順)。エラー・発話なしカードは議事録には残さない。
+        let savableCards = record.catchupCards
+            .filter { !$0.isError && !$0.isNoSpeech }
+            .sorted(by: { $0.createdAt < $1.createdAt })
+        if !savableCards.isEmpty {
             lines.append("---")
             lines.append("")
-            lines.append("## 💬 Q&A")
+            lines.append("## ⏱ Catchup履歴")
             lines.append("")
-            appendQAEntries(record.qaEntries, to: &lines)
+            for card in savableCards {
+                lines.append("### \(card.periodLabel)（\(card.minutes)分）")
+                lines.append("")
+                lines.append(card.text)
+                lines.append("")
+            }
         }
 
         return lines.joined(separator: "\n") + "\n"
-    }
-
-    private static func appendQAEntries(_ entries: [TranscriptEntry], to lines: inout [String]) {
-        var i = 0
-        while i < entries.count {
-            let entry = entries[i]
-            if entry.speaker == .user {
-                lines.append("### Q: \(entry.text)")
-                lines.append("")
-                // 直後の Claude 回答をペアリング
-                if i + 1 < entries.count, entries[i + 1].speaker == .claude {
-                    lines.append("**A:**")
-                    lines.append("")
-                    lines.append(entries[i + 1].text)
-                    lines.append("")
-                    i += 2
-                    continue
-                }
-            }
-            i += 1
-        }
     }
 
     // MARK: - ファイル名

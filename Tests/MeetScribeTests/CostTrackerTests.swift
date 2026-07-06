@@ -96,11 +96,31 @@ final class CostTrackerTests: XCTestCase {
         XCTAssertEqual(result, 0.0, accuracy: 1e-12)
     }
 
+    // MARK: - duration 型 usage (gpt-realtime-whisper)
+
+    func test_extractCost_durationUsage_usesPerSecondRate() {
+        let usage: [String: Any] = ["type": "duration", "seconds": 60.0]
+        let result = CostTracker.extractCost(from: usage)
+        XCTAssertEqual(result, 0.017, accuracy: 1e-12)  // $0.017/分
+    }
+
+    func test_extractCost_durationUsage_intSeconds() {
+        let usage: [String: Any] = ["type": "duration", "seconds": 30]
+        let result = CostTracker.extractCost(from: usage)
+        XCTAssertEqual(result, 0.0085, accuracy: 1e-12)
+    }
+
+    func test_extractCost_durationUsage_missingSeconds_isZero() {
+        let usage: [String: Any] = ["type": "duration"]
+        XCTAssertEqual(CostTracker.extractCost(from: usage), 0.0, accuracy: 1e-12)
+    }
+
     // MARK: - Rate constants
 
     func test_rates_matchDocumentedPricing() {
         XCTAssertEqual(CostTracker.textInputRate, 2.50 / 1_000_000, accuracy: 1e-15)
         XCTAssertEqual(CostTracker.audioInputRate, 6.00 / 1_000_000, accuracy: 1e-15)
         XCTAssertEqual(CostTracker.outputRate, 10.00 / 1_000_000, accuracy: 1e-15)
+        XCTAssertEqual(CostTracker.realtimeWhisperRatePerSecond, 0.017 / 60, accuracy: 1e-15)
     }
 }

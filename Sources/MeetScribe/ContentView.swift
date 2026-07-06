@@ -2,14 +2,11 @@ import SwiftUI
 
 /// メインUI。2カラム構成:
 /// - 左: 会議文字起こしストリーム (`TranscriptListView`)
-/// - 右: Scribe Q&A エリア (`ScribeQAView`)
+/// - 右: AI傍聴パネル (`CopilotPanelView`: 全体像 + Catchup要約)
 /// HSplitView でドラッグによる左右リサイズが可能。VUメーターは HeaderView に統合済。
 struct ContentView: View {
     @Bindable private var state = AppState.shared
     private let transcripts = TranscriptStore.shared
-
-    @State private var apiKeyInput = ""
-    @State private var hasAPIKey = KeychainStore.hasAPIKey
 
     var body: some View {
         ZStack {
@@ -23,21 +20,15 @@ struct ContentView: View {
                 if !setupComplete {
                     SetupSectionView(
                         state: state,
-                        apiKeyInput: $apiKeyInput,
-                        hasAPIKey: $hasAPIKey
+                        hasAPIKey: $state.hasAPIKey
                     )
                     Divider().opacity(0.3)
                 }
                 HSplitView {
                     TranscriptListView(state: state, transcripts: transcripts)
                         .frame(minWidth: 200, idealWidth: 300, maxWidth: .infinity)
-                    ScribeQAView(
-                        state: state,
-                        transcripts: transcripts,
-                        queryText: $state.queryText,
-                        onSubmit: submitQuestion
-                    )
-                    .frame(minWidth: 200, idealWidth: 300, maxWidth: .infinity)
+                    CopilotPanelView(state: state)
+                        .frame(minWidth: 200, idealWidth: 300, maxWidth: .infinity)
                 }
                 Divider().opacity(0.3)
                 SettingsFooterView(state: state)
@@ -52,18 +43,10 @@ struct ContentView: View {
 
     private var setupComplete: Bool {
         state.allPermissionsGranted
-            && hasAPIKey
+            && state.hasAPIKey
             && state.meetingsSaveDirectoryURL != nil
     }
 
-    private func submitQuestion() {
-        let trimmed = state.queryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !state.isAsking else { return }
-        state.queryText = ""
-        Task {
-            await QAController.shared.ask(question: trimmed)
-        }
-    }
 }
 
 #Preview {

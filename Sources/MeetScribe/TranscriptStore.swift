@@ -7,6 +7,24 @@ struct TranscriptEntry: Identifiable, Equatable {
     var text: String
     let createdAt: Date
     var isFinal: Bool
+    /// 日本語訳 (原文が英語等の場合のみ)。整形LLMが確定後に付与する。
+    var translation: String?
+
+    init(
+        id: String,
+        speaker: SpeakerLabel,
+        text: String,
+        createdAt: Date,
+        isFinal: Bool,
+        translation: String? = nil
+    ) {
+        self.id = id
+        self.speaker = speaker
+        self.text = text
+        self.createdAt = createdAt
+        self.isFinal = isFinal
+        self.translation = translation
+    }
 }
 
 @MainActor
@@ -49,6 +67,16 @@ final class TranscriptStore {
         }
     }
 
+    /// 確定済みエントリのテキストを整形結果で置き換え、対訳があれば付与する
+    /// (GPT-4.1 mini クリーナー用)。該当 itemId が無ければ何もしない
+    /// (kill/clear 後の遅延到着対策)。
+    func updateFinalText(itemId: String, text: String, translation: String? = nil) {
+        if let idx = entries.firstIndex(where: { $0.id == itemId }) {
+            entries[idx].text = text
+            entries[idx].translation = translation
+        }
+    }
+
     func clear() {
         entries.removeAll()
     }
@@ -58,57 +86,8 @@ final class TranscriptStore {
         entries.filter { $0.speaker == .me || $0.speaker == .other }
     }
 
-    /// Q&A セッションのみ (ユーザー質問 + Claude回答)
-    var qaEntries: [TranscriptEntry] {
-        entries.filter { $0.speaker == .user || $0.speaker == .claude }
-    }
-
-    /// Claude に渡すための会議文字起こしテキスト
+    /// タイトル生成・要約に渡すための会議文字起こしテキスト
     var meetingTranscriptText: String {
         meetingEntries.map { "[\($0.speaker.displayName)] \($0.text)" }.joined(separator: "\n")
-    }
-
-    // MARK: - Q&A 操作
-
-    /// ユーザーの質問を追加。
-    @discardableResult
-    func addUserQuery(_ text: String) -> String {
-        let id = "qa-user-\(UUID().uuidString)"
-        entries.append(TranscriptEntry(
-            id: id,
-            speaker: .user,
-            text: text,
-            createdAt: Date(),
-            isFinal: true
-        ))
-        return id
-    }
-
-    /// Claude の空の回答プレースホルダーを追加 (ストリーミングで追記していく用)。
-    @discardableResult
-    func startClaudeAnswer() -> String {
-        let id = "qa-claude-\(UUID().uuidString)"
-        entries.append(TranscriptEntry(
-            id: id,
-            speaker: .claude,
-            text: "",
-            createdAt: Date(),
-            isFinal: false
-        ))
-        return id
-    }
-
-    /// 指定 id のエントリにテキストを追記する (Claude応答のストリーミング用)。
-    func appendToAnswer(itemId: String, chunk: String) {
-        if let idx = entries.firstIndex(where: { $0.id == itemId }) {
-            entries[idx].text += chunk
-        }
-    }
-
-    /// 指定 id のエントリを確定させる。
-    func finalizeAnswer(itemId: String) {
-        if let idx = entries.firstIndex(where: { $0.id == itemId }) {
-            entries[idx].isFinal = true
-        }
     }
 }

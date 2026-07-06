@@ -28,7 +28,10 @@ final class MicrophoneCapture: @unchecked Sendable {
     private(set) var isRunning = false
 
     func start(onBuffer: BufferHandler? = nil) throws {
-        guard !isRunning else { return }
+        // 既に動いている場合は一旦止めてから開始する。早期 return すると新しい
+        // bufferHandler への差し替えがスキップされ、切断済みの旧パイプラインに
+        // 音声が流れ続けて「録音中なのに文字起こしが来ない」詰みになる。
+        if isRunning { stop() }
         bufferHandler = onBuffer
         tapCount = 0
 

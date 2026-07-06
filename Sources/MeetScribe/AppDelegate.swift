@@ -26,6 +26,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
+        setupMainMenu()
         setupMenuBar()
 
         // MEETSCRIBE_SMOKE_TEST=1 が指定されていたら、モデル切替を自動で回して
@@ -67,6 +68,42 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+    }
+
+    // MARK: - メインメニュー (キーボードショートカットのルーティング)
+
+    /// メニューバー常駐アプリでもメインメニューが無いと cmd+C / cmd+V / cmd+A が
+    /// NSTextView へルーティングされない (macOS はキー同等イベントをメインメニュー
+    /// 経由で配送する)。「文字起こしを選択したのに cmd+C でコピーできない」の根本原因。
+    /// 画面には出ないが、標準の編集アクションを持つ最小メニューを登録する。
+    private func setupMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        main.addItem(appItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(
+            title: "MeetScribe を終了",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        ))
+        appItem.submenu = appMenu
+
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let edit = NSMenu(title: "編集")
+        edit.addItem(NSMenuItem(title: "取り消す", action: Selector(("undo:")), keyEquivalent: "z"))
+        let redo = NSMenuItem(title: "やり直す", action: Selector(("redo:")), keyEquivalent: "Z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(NSMenuItem(title: "カット", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: "コピー", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: "ペースト", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: "すべてを選択", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editItem.submenu = edit
+
+        NSApp.mainMenu = main
     }
 
     // MARK: - メニューバー常駐
@@ -139,16 +176,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[SMOKE] Starting smoke test")
             let state = AppState.shared
 
-            // 1. モデル切替
-            let models: [ClaudeModel] = [.opus, .sonnet, .haiku, .opus, .haiku, .sonnet]
-            for (i, m) in models.enumerated() {
-                state.selectedModel = m
-                NSLog("[SMOKE] model \(i+1)/\(models.count): \(m.displayName)")
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            NSLog("[SMOKE] ✅ model switching passed")
-
-            // 2. ClaudeQAClient 初期化
+            // 1. ClaudeQAClient 初期化 (タイトル生成用)
             do {
                 _ = try ClaudeQAClient()
                 NSLog("[SMOKE] ✅ ClaudeQAClient init passed")
@@ -156,22 +184,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[SMOKE] ⚠️ ClaudeQAClient init failed: \(error.localizedDescription)")
             }
 
-            // 3. queryText 状態更新 (TextField 相当)
-            let samples = ["こ", "こん", "こんに", "こんにちは", ""]
-            for s in samples {
-                state.queryText = s
-                NSLog("[SMOKE] queryText = '\(s)'")
-                try? await Task.sleep(for: .milliseconds(80))
-            }
-            NSLog("[SMOKE] ✅ queryText update passed")
-
-            // 4. TranscriptStore 操作
-            let qaId = TranscriptStore.shared.startClaudeAnswer()
-            TranscriptStore.shared.appendToAnswer(itemId: qaId, chunk: "テスト応答")
-            TranscriptStore.shared.finalizeAnswer(itemId: qaId)
+            // 2. TranscriptStore 操作 (整形置換 + 対訳)
+            TranscriptStore.shared.completeItem(itemId: "smk-t", finalText: "raw text", speaker: .me)
+            TranscriptStore.shared.updateFinalText(itemId: "smk-t", text: "clean text", translation: "訳")
             NSLog("[SMOKE] ✅ transcript store passed")
 
-            // 5. 権限状態更新
+            // 3. Copilot 状態 (カード追加 + 全体像)
+            state.catchupCards.insert(
+                CatchupCard(periodLabel: "00:00〜00:03", minutes: 3, text: "テスト要約"),
+                at: 0
+            )
+            state.overview = MeetingOverview(purpose: "テスト", agenda: ["A"], currentTopic: "B")
+            try? await Task.sleep(for: .milliseconds(100))
+            state.catchupCards = []
+            state.overview = nil
+            NSLog("[SMOKE] ✅ copilot state passed")
+
+            // 4. 権限状態更新
             state.microphonePermission = .granted
             state.screenRecordingPermission = .granted
             state.micLevel = 0.5
@@ -208,12 +237,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
-        // Q&A も1件
-        TranscriptStore.shared.addUserQuery("テスト質問")
-        let aid = TranscriptStore.shared.startClaudeAnswer()
-        TranscriptStore.shared.appendToAnswer(itemId: aid, chunk: "テスト応答")
-        TranscriptStore.shared.finalizeAnswer(itemId: aid)
-
         // 保存先を一時ディレクトリにして TranscriptExporter を直接検証
         let tmpDir = FileManager.default.temporaryDirectory
             .appending(path: "meetscribe-smoke-\(UUID().uuidString.prefix(8))")
@@ -222,9 +245,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             endedAt: now,
             title: "スモークテスト会議",
             meetingEntries: TranscriptStore.shared.meetingEntries,
-            qaEntries: TranscriptStore.shared.qaEntries,
+            overview: MeetingOverview(purpose: "テスト", agenda: ["確認"], currentTopic: "保存"),
+            catchupCards: [CatchupCard(periodLabel: "00:00〜00:01", minutes: 1, text: "要約テスト")],
             totalCostUSD: 0.0042,
-            model: "gpt-4o-transcribe"
+            model: TranscriptionClient.transcriptionModel
         )
         do {
             let url = try TranscriptExporter.save(record, to: tmpDir)

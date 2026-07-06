@@ -6,6 +6,9 @@ import AppKit
 struct SettingsFooterView: View {
     @Bindable var state: AppState
 
+    // API Key 編集ポップオーバーの表示状態
+    @State private var showAPIKeyPopover = false
+
     var body: some View {
         HStack(spacing: 10) {
             folderControl(
@@ -14,7 +17,8 @@ struct SettingsFooterView: View {
                 url: state.meetingsSaveDirectoryURL,
                 tint: state.meetingsSaveDirectoryURL == nil ? .orange : .green,
                 onChange: selectMeetingsFolder,
-                onClear: nil
+                onClear: nil,
+                hint: "録音停止時に議事録がここに保存されます。未設定だと録音を開始できません"
             )
             Divider().frame(height: 12)
             folderControl(
@@ -25,6 +29,12 @@ struct SettingsFooterView: View {
                 onChange: selectKnowledgeFolder,
                 onClear: { state.knowledgeFolderURL = nil }
             )
+            Divider().frame(height: 12)
+            languageControl
+            Divider().frame(height: 12)
+            translationToggle
+            Divider().frame(height: 12)
+            apiKeyControl
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -38,7 +48,8 @@ struct SettingsFooterView: View {
         url: URL?,
         tint: Color,
         onChange: @escaping () -> Void,
-        onClear: (() -> Void)?
+        onClear: (() -> Void)?,
+        hint: String? = nil
     ) -> some View {
         HStack(spacing: 4) {
             // アイコン + ラベル + パス全体がクリック可能。押すとフォルダ選択ダイアログ。
@@ -66,7 +77,10 @@ struct SettingsFooterView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(url.map { "\(label): \($0.path)（クリックで変更）" } ?? "\(label)フォルダを選択")
+            .help({
+                let base = url.map { "\(label): \($0.path)（クリックで変更）" } ?? "\(label)フォルダを選択"
+                return hint.map { "\(base)。\($0)" } ?? base
+            }())
 
             // 解除（任意フォルダのみ）。xmark アイコンで文言なし。
             if let onClear, url != nil {
@@ -79,6 +93,84 @@ struct SettingsFooterView: View {
                 .help("\(label)フォルダを解除")
             }
         }
+    }
+
+    /// 文字起こし言語の切替。Auto = OpenAI 側の自動検出 (language パラメータ省略)。
+    /// 録音中に変えても現セッションには効かず、次回の録音開始から適用される。
+    private var languageControl: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "globe")
+                .foregroundStyle(.blue)
+                .font(.system(size: 12))
+            Picker("", selection: $state.transcriptionLanguage) {
+                Text("Auto").tag("auto")
+                Text("🇯🇵").tag("ja")
+                Text("🇺🇸").tag("en")
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .labelsHidden()
+            .fixedSize()
+        }
+        .help("文字起こしの言語。Auto = 発話から自動検出。次回の録音開始から適用")
+    }
+
+    /// 対訳表示 (英語の発話に日本語訳を併記) の ON/OFF。
+    private var translationToggle: some View {
+        Button(action: { state.showTranslations.toggle() }) {
+            HStack(spacing: 4) {
+                Image(systemName: "character.book.closed.fill")
+                    .foregroundStyle(state.showTranslations ? Color.blue : .secondary.opacity(0.6))
+                    .font(.system(size: 12))
+                Text("対訳")
+                    .font(.system(size: 10))
+                    .foregroundStyle(state.showTranslations ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.7))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(state.showTranslations
+              ? "対訳ON: 英語の発話に日本語訳を併記します（クリックでOFF）"
+              : "対訳OFF: クリックすると英語の発話に日本語訳を併記します")
+    }
+
+    // MARK: - API Key 管理 (常時アクセス可能)
+
+    /// OpenAI API Key の登録・変更。セットアップ完了後は SetupSectionView が
+    /// 消えるため、いつでも触れるようフッターに常設する。
+    private var apiKeyControl: some View {
+        Button(action: { showAPIKeyPopover.toggle() }) {
+            HStack(spacing: 4) {
+                Image(systemName: "key.fill")
+                    .foregroundStyle(state.hasAPIKey ? Color.green : .orange)
+                    .font(.system(size: 12))
+                Text("APIキー:")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Text(state.hasAPIKey ? "設定済み" : "未設定")
+                    .font(.system(size: 10))
+                    .foregroundStyle(state.hasAPIKey ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.7))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("OpenAI API Key を登録・変更（クリックで入力欄を開く）")
+        .popover(isPresented: $showAPIKeyPopover, arrowEdge: .top) {
+            apiKeyEditor
+        }
+    }
+
+    private var apiKeyEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("OpenAI API Key")
+                .font(.system(size: 11, weight: .semibold))
+            APIKeyEditorView(
+                state: state,
+                onSaved: { showAPIKeyPopover = false },
+                fieldWidth: 260
+            )
+        }
+        .padding(12)
     }
 
     static func tildePath(_ url: URL) -> String {

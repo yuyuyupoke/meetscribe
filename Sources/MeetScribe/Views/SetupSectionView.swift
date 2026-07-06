@@ -5,8 +5,13 @@ import AppKit
 /// すべて許可されて API Key も設定済みなら ContentView 側で非表示になる。
 struct SetupSectionView: View {
     let state: AppState
-    @Binding var apiKeyInput: String
     @Binding var hasAPIKey: Bool
+    /// 登録済みキーの変更モード。hasAPIKey を false に倒すと canStart まで
+    /// 無効化されてしまうため、編集状態は別フラグで持つ。
+    @State private var isEditingAPIKey = false
+    /// claude CLI の検出結果。nil = チェック中。`which` フォールバックが
+    /// プロセスを起動するためバックグラウンドで判定する。
+    @State private var claudeCLIInstalled: Bool?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -15,29 +20,42 @@ struct SetupSectionView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button(action: { PermissionManager.refreshAll() }) {
+                Button(action: refreshChecks) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10))
                 }
                 .buttonStyle(.borderless)
-                .help("権限状態を再チェック")
+                .help("権限・CLI の状態を再チェック")
             }
             permissionRow(
-                label: "マイク",
+                label: "マイク (必須)",
                 current: state.microphonePermission,
                 action: requestMic
             )
             permissionRow(
-                label: "画面収録 (システム音声)",
+                label: "画面収録・システム音声 (必須)",
                 current: state.screenRecordingPermission,
                 action: requestScreen
             )
             apiKeyRow
             meetingsFolderRow
             knowledgeFolderRow
+            claudeCLIRow
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .task { await recheckClaudeCLI() }
+    }
+
+    /// 権限と claude CLI をまとめて再チェックする (更新ボタン用)。
+    private func refreshChecks() {
+        PermissionManager.refreshAll()
+        Task { await recheckClaudeCLI() }
+    }
+
+    private func recheckClaudeCLI() async {
+        let found = await Task.detached { ClaudeQAClient.isClaudeInstalled }.value
+        claudeCLIInstalled = found
     }
 
     // MARK: - 議事録保存先フォルダ行 (必須)
@@ -178,47 +196,67 @@ struct SetupSectionView: View {
 
     @ViewBuilder
     private var apiKeyRow: some View {
-        if hasAPIKey {
+        if hasAPIKey && !isEditingAPIKey {
             HStack {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("OpenAI API Key")
+                Text("OpenAI API Key (必須)")
                     .font(.system(size: 11))
                 Spacer()
-                Button("変更") { hasAPIKey = false }
+                Button("変更") { isEditingAPIKey = true }
                     .buttonStyle(.borderless)
                     .font(.system(size: 10))
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Image(systemName: "key.fill")
+                    // 未設定は録音開始をブロックする必須項目なので、
+                    // フォルダ未設定と同じ警告三角で統一する。
+                    Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    Text("OpenAI API Key")
+                    Text("OpenAI API Key (必須)")
                         .font(.system(size: 11))
                     Spacer()
                 }
-                HStack(spacing: 4) {
-                    SecureField("sk-proj-...", text: $apiKeyInput)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 10))
-                    Button("保存") { saveAPIKey() }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 10))
-                        .disabled(apiKeyInput.isEmpty)
-                }
+                APIKeyEditorView(
+                    state: state,
+                    onSaved: { isEditingAPIKey = false },
+                    onCancel: isEditingAPIKey ? { isEditingAPIKey = false } : nil
+                )
             }
         }
     }
 
-    private func saveAPIKey() {
-        do {
-            try KeychainStore.save(apiKeyInput)
-            hasAPIKey = true
-            apiKeyInput = ""
-        } catch {
-            state.lastError = "API Key保存失敗: \(error.localizedDescription)"
+    // MARK: - Claude CLI 行 (Q&A・タイトル生成に使用)
+
+    /// claude CLI の存在チェック。無くても録音・文字起こしはできるが、
+    /// 議事録タイトルの自動生成が使えない (タイムスタンプ名になる) ため、
+    /// セットアップ段階で気づけるようにする。
+    @ViewBuilder
+    private var claudeCLIRow: some View {
+        HStack {
+            switch claudeCLIInstalled {
+            case .some(true):
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            case .some(false):
+                Image(systemName: "questionmark.circle.fill").foregroundStyle(.orange)
+            case .none:
+                ProgressView().controlSize(.mini)
+            }
+            Text("Claude CLI (タイトル生成用・任意)")
+                .font(.system(size: 11))
+            Spacer()
+            if claudeCLIInstalled == false {
+                Button("入手方法") {
+                    NSWorkspace.shared.open(URL(string: "https://code.claude.com/docs/ja/setup")!)
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+            }
         }
+        .help(claudeCLIInstalled == false
+              ? "議事録タイトルの自動生成に使います。ターミナルで `npm install -g @anthropic-ai/claude-code` を実行後、右上の更新ボタンで再チェックしてください。無くても録音・文字起こし・要約は使えます (タイトルはタイムスタンプになります)。"
+              : "議事録タイトルの自動生成に使う Claude Code CLI")
     }
 
     // MARK: - 権限リクエスト
@@ -239,6 +277,9 @@ struct SetupSectionView: View {
             await PermissionManager.refreshScreenRecording()
             if state.screenRecordingPermission != .granted {
                 PermissionManager.openSystemSettings(for: .screenRecording)
+                // macOS の仕様で、画面収録の許可はアプリ再起動まで反映されない。
+                // これを伝えないと「許可したのに変わらない」という行き止まりになる。
+                state.lastError = "システム設定で画面収録を許可した後、MeetScribe の再起動が必要です（メニューバーのアイコン → 終了 → 再度起動）"
             }
         }
     }

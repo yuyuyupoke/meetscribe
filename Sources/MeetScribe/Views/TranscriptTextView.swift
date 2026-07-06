@@ -12,6 +12,8 @@ import AppKit
 ///   (ユーザーが過去ログを読んで選択している最中は割り込まない)
 struct TranscriptTextView: NSViewRepresentable {
     let entries: [TranscriptEntry]
+    /// 対訳 (日本語訳) を表示するか。フッターのトグルと連動。
+    var showTranslations: Bool = true
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -19,9 +21,13 @@ struct TranscriptTextView: NSViewRepresentable {
     enum Style {
         static let labelFontSize: CGFloat = 9
         static let bodyFontSize: CGFloat = 12
+        static let translationFontSize: CGFloat = 11
         static let horizontalInset: CGFloat = 12
         static let verticalInset: CGFloat = 4
         static let bottomFollowThreshold: CGFloat = 40
+        /// エントリ間の見た目の余白。改行文字を重ねるのではなく段落スタイルで
+        /// 空けることで、コピー時に余計な空行が混入しないようにする。
+        static let entrySpacing: CGFloat = 8
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -63,7 +69,7 @@ struct TranscriptTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView,
               let textStorage = textView.textStorage else { return }
 
-        let signature = Self.signature(of: entries)
+        let signature = Self.signature(of: entries, showTranslations: showTranslations)
         guard signature != context.coordinator.lastSignature else { return }
 
         let wasAtBottom = scrollView.isNearBottom(
@@ -71,7 +77,7 @@ struct TranscriptTextView: NSViewRepresentable {
         )
         let hasActiveSelection = (textView.selectedRange().length > 0)
 
-        let attributed = Self.buildAttributed(entries: entries)
+        let attributed = Self.buildAttributed(entries: entries, showTranslations: showTranslations)
 
         textStorage.beginEditing()
         textStorage.setAttributedString(attributed)
@@ -86,11 +92,18 @@ struct TranscriptTextView: NSViewRepresentable {
     }
 
     /// updateNSView 内で前回描画との差分を判定するための軽量シグネチャ。
-    /// (件数, 末尾エントリの id, 末尾エントリの text 長, 末尾エントリの isFinal)。
-    /// 末尾以外が破壊的に書き換わるユースケースは現状なし (TranscriptStore は append-only)。
-    private static func signature(of entries: [TranscriptEntry]) -> String {
-        guard let last = entries.last else { return "0" }
-        return "\(entries.count)|\(last.id)|\(last.text.count)|\(last.isFinal ? 1 : 0)"
+    /// 整形・対訳は過去エントリを遅れて書き換える (updateFinalText) ため、
+    /// 全エントリの内容をハッシュで畳み込む (文字数だけだと「同一文字数の
+    /// 誤変換修正」が検知できず UI に反映されない)。対訳トグル切替でも再描画する。
+    static func signature(of entries: [TranscriptEntry], showTranslations: Bool) -> String {
+        var hasher = Hasher()
+        for e in entries {
+            hasher.combine(e.text)
+            hasher.combine(e.translation)
+            hasher.combine(e.isFinal)
+        }
+        hasher.combine(showTranslations)
+        return "\(entries.count)|\(hasher.finalize())"
     }
 
     /// 将来 NSTextViewDelegate を持たせる枠 + 描画差分判定の保持場所。
@@ -100,15 +113,38 @@ struct TranscriptTextView: NSViewRepresentable {
 
     // MARK: - Rendering
 
-    static func buildAttributed(entries: [TranscriptEntry]) -> NSAttributedString {
+    /// エントリ列を1本の attributed string にする。
+    /// - 話者ラベルは「[自分] 」形式で本文と同一行 (コピペした時に読みやすい)
+    /// - エントリ間の余白は改行の重ね打ちではなく paragraphSpacing で確保
+    ///   (ドラッグ選択・コピーに余計な空行が混入しない)
+    /// - 対訳は本文の次の行に「└ 」接頭辞 + 小さめ薄色で表示
+    static func buildAttributed(
+        entries: [TranscriptEntry],
+        showTranslations: Bool
+    ) -> NSAttributedString {
+        // エントリの最終段落に付ける (次エントリとの余白)
+        let entryEndStyle = NSMutableParagraphStyle()
+        entryEndStyle.paragraphSpacing = Style.entrySpacing
+        // 本文の直後に対訳が続く場合の本文段落 (訳と密着させる)
+        let tightStyle = NSMutableParagraphStyle()
+        tightStyle.paragraphSpacing = 1
+
         let result = NSMutableAttributedString()
         for (i, entry) in entries.enumerated() {
+            let translation: String? = {
+                guard showTranslations,
+                      let t = entry.translation, !t.isEmpty else { return nil }
+                return t
+            }()
+            let bodyStyle = (translation == nil) ? entryEndStyle : tightStyle
+
             let labelAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(
                     ofSize: Style.labelFontSize,
                     weight: .semibold
                 ),
-                .foregroundColor: speakerColor(for: entry.speaker)
+                .foregroundColor: speakerColor(for: entry.speaker),
+                .paragraphStyle: bodyStyle
             ]
             let bodyAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(
@@ -116,20 +152,37 @@ struct TranscriptTextView: NSViewRepresentable {
                     weight: .regular
                 ),
                 .foregroundColor: NSColor.labelColor
-                    .withAlphaComponent(entry.isFinal ? 1.0 : 0.7)
+                    .withAlphaComponent(entry.isFinal ? 1.0 : 0.7),
+                .paragraphStyle: bodyStyle
             ]
 
             result.append(NSAttributedString(
-                string: entry.speaker.displayName,
+                string: "[\(entry.speaker.displayName)] ",
                 attributes: labelAttrs
             ))
-            result.append(NSAttributedString(string: "\n", attributes: labelAttrs))
             result.append(NSAttributedString(
                 string: entry.text,
                 attributes: bodyAttrs
             ))
+
+            if let translation {
+                let translationAttrs: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(
+                        ofSize: Style.translationFontSize,
+                        weight: .regular
+                    ),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .paragraphStyle: entryEndStyle
+                ]
+                result.append(NSAttributedString(string: "\n", attributes: bodyAttrs))
+                result.append(NSAttributedString(
+                    string: "└ \(translation)",
+                    attributes: translationAttrs
+                ))
+            }
+
             if i < entries.count - 1 {
-                result.append(NSAttributedString(string: "\n\n", attributes: bodyAttrs))
+                result.append(NSAttributedString(string: "\n", attributes: bodyAttrs))
             }
         }
         return result

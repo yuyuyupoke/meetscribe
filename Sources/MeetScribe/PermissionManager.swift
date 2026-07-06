@@ -39,7 +39,6 @@ enum PermissionManager {
     /// CGPreflightScreenCaptureAccess は ad-hoc 署名や再ビルド時に不正確なので使わない。
     static func refreshScreenRecording() async {
         let granted: Bool
-        var errorDetail: String?
         if #available(macOS 13.0, *) {
             do {
                 _ = try await SCShareableContent.excludingDesktopWindows(
@@ -50,7 +49,6 @@ enum PermissionManager {
                 granted = true
             } catch {
                 DebugLog.log("[MeetScribe] SCShareableContent FAIL: \(error.localizedDescription)")
-                errorDetail = "\(error.localizedDescription)"
                 granted = false
             }
         } else {
@@ -58,9 +56,12 @@ enum PermissionManager {
         }
         await MainActor.run {
             AppState.shared.screenRecordingPermission = granted ? .granted : .notDetermined
-            if !granted {
-                AppState.shared.lastError = "画面収録: \(errorDetail ?? "unknown")"
-            } else if AppState.shared.lastError?.hasPrefix("画面収録") == true {
+            // 「未許可」は初回起動の正常な状態なので lastError には書かない。
+            // ここで赤バナーを出すと、何も操作していないのに起動直後から
+            // 技術的エラーが表示され「壊れている」ように見える (許可状態は
+            // SetupSectionView の権限行アイコンで十分伝わる)。
+            // 許可を検出したら「再起動が必要」案内 (SetupSectionView が出す) を消す。
+            if granted, AppState.shared.lastError?.hasPrefix("システム設定で画面収録") == true {
                 AppState.shared.lastError = nil
             }
         }

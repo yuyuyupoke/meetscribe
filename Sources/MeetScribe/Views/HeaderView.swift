@@ -69,7 +69,7 @@ struct HeaderView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!state.canStart)
-                .help(state.canStart ? "録音開始" : "セットアップが必要")
+                .help(state.canStart ? "録音開始" : (state.startBlockReason ?? "セットアップが必要"))
             case .starting, .stopping:
                 ProgressView().controlSize(.small)
             case .running:

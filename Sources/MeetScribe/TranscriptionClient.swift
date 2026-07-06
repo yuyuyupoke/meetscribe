@@ -38,6 +38,29 @@ enum TranscriptionClientError: Error, LocalizedError {
 final class TranscriptionClient: NSObject, @unchecked Sendable {
     private let apiKey: String
     private let speaker: SpeakerLabel
+    /// 転写言語 (ISO-639-1)。nil = 自動検出 (language パラメータ自体を送らない)。
+    private let language: String?
+
+    /// 転写モデル。`gpt-realtime-whisper` はネイティブストリーミング対応で、
+    /// VAD なし + 手動 commit により連続発話でも delta が流れ続ける。
+    /// 旧 `gpt-4o-transcribe` + server_vad は「無音までターン確定しない = 連続発話で
+    /// 文字が一切出ない」問題があったため LecTrace 方式 (VAD無効+定期commit) に移行。
+    static let transcriptionModel = "gpt-realtime-whisper"
+
+    /// 強制 commit の間隔。この周期で必ず転写が確定するので、息継ぎのない
+    /// 連続発話 (講義等) でもリアルタイムに文字が出る。
+    private static let commitInterval: TimeInterval = 4
+
+    /// commit に必要な最小送信バイト数。API は 100ms 未満のバッファ commit を
+    /// 拒否するため、200ms 分 (24kHz * 2byte * 0.2s = 9,600B) を下限にする。
+    private static let minCommitBytes = 9_600
+
+    /// 有声判定のピーク振幅閾値 (PCM16、≈ -36 dBFS)。マイク (VPIO ノイズ抑制後) や
+    /// 再生なしのシステム音声は無音でも PCM が流れ続けるため、バイト量だけでは
+    /// 無音ウィンドウを判別できない。閾値未満しか無いウィンドウは commit せず
+    /// clear で捨てて、無音ハルシネーションと課金を防ぐ。控えめ (低め) の値にして
+    /// 小声の発話を取りこぼさないことを優先する。
+    private static let voicePeakThreshold: Int16 = 500
 
     private let endpoint = URL(string: "wss://api.openai.com/v1/realtime?intent=transcription")!
 
@@ -51,6 +74,9 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     private var _intentionalDisconnect = false
     private var _unexpectedCloseFired = false
     private var _heartbeatTask: Task<Void, Never>?
+    private var _commitTask: Task<Void, Never>?
+    private var _bytesSinceLastCommit = 0
+    private var _voiceSinceLastCommit = false
 
     /// ハートビート ping 間隔。OpenAI Realtime API は仕様上 WebSocket ping/pong に応答する。
     /// 20秒ごとに ping を送り、10秒以内に pong が返らなければ凍結とみなし切断トリガー。
@@ -79,9 +105,10 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         return _isConnected
     }
 
-    init(apiKey: String, speaker: SpeakerLabel) {
+    init(apiKey: String, speaker: SpeakerLabel, language: String? = nil) {
         self.apiKey = apiKey
         self.speaker = speaker
+        self.language = language
         super.init()
     }
 
@@ -130,8 +157,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         _onUnexpectedClose = nil
         let hb = _heartbeatTask
         _heartbeatTask = nil
+        let ct = _commitTask
+        _commitTask = nil
         stateLock.unlock()
         hb?.cancel()
+        ct?.cancel()
 
         webSocket?.cancel(with: .goingAway, reason: nil)
         webSocket = nil
@@ -261,7 +291,28 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     /// 旧 payload を送ると `unknown parameter 'session.input_audio_format'` 等で
     /// 拒否される。
     private func sendSessionUpdate() {
-        let message: [String: Any] = [
+        sendJSON(Self.makeSessionUpdatePayload(language: language))
+    }
+
+    /// session.update の payload を組み立てる。テスト可能にするため static に分離。
+    ///
+    /// 設計判断 (LecTrace 方式):
+    ///   - `turn_detection: null` で server_vad を無効化。server_vad は「無音が
+    ///     silence_duration_ms 続くまで転写が始まらない」ため、連続発話で文字が
+    ///     出ない不具合の原因だった。
+    ///   - 代わりに `commitInterval` 秒ごとの手動 commit で必ず転写を確定させる。
+    ///   - `language` は nil (自動検出) のときキー自体を送らない。
+    ///   - `gpt-realtime-whisper` は `prompt` パラメータ非対応
+    ///     (`The 'prompt' parameter is not supported for this model.` で拒否される)
+    ///     なのでキー自体を送らない。gpt-4o-transcribe 系のみが対応する。
+    static func makeSessionUpdatePayload(language: String?) -> [String: Any] {
+        var transcription: [String: Any] = [
+            "model": transcriptionModel
+        ]
+        if let language {
+            transcription["language"] = language
+        }
+        return [
             "type": "session.update",
             "session": [
                 // GA で必須化: transcription-only セッションであることを明示。
@@ -273,26 +324,72 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                             "type": "audio/pcm",
                             "rate": 24_000
                         ],
-                        "transcription": [
-                            "model": "gpt-4o-transcribe",
-                            "language": "ja",
-                            "prompt": ""
-                        ],
-                        "turn_detection": [
-                            "type": "server_vad",
-                            "threshold": 0.75,
-                            "prefix_padding_ms": 200,
-                            "silence_duration_ms": 700
-                        ],
+                        "transcription": transcription,
+                        "turn_detection": NSNull(),
                         "noise_reduction": [
                             "type": "far_field"
                         ]
                     ]
-                ],
-                "include": ["item.input_audio_transcription.logprobs"]
+                ]
             ]
         ]
-        sendJSON(message)
+    }
+
+    // MARK: - 定期 commit (VAD 無効化に伴う手動ターン確定)
+
+    /// `session.created` 受信時に開始。`commitInterval` ごとに、前回 commit 以降に
+    /// 十分な音声 (`minCommitBytes` 以上) を送信していれば `input_audio_buffer.commit`
+    /// を送る。commit で転写アイテムが確定し delta/completed が流れてくる。
+    /// 無音等で送信量が足りないときは commit を見送り、次周期に持ち越す
+    /// (空バッファ commit は API エラーになるため)。
+    private func startCommitLoop() {
+        stateLock.lock()
+        _commitTask?.cancel()
+        let task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.commitInterval))
+                if Task.isCancelled { return }
+                guard let self = self, self.isConnected else { return }
+                self.commitIfNeeded()
+            }
+        }
+        _commitTask = task
+        stateLock.unlock()
+    }
+
+    private func commitIfNeeded() {
+        stateLock.lock()
+        let bytes = _bytesSinceLastCommit
+        let hasVoice = _voiceSinceLastCommit
+        let enough = bytes >= Self.minCommitBytes
+        if enough {
+            _bytesSinceLastCommit = 0
+            _voiceSinceLastCommit = false
+        }
+        stateLock.unlock()
+        guard enough else { return }  // 送信量不足 → 次周期に持ち越し
+
+        if hasVoice {
+            sendJSON(["type": "input_audio_buffer.commit"])
+        } else {
+            // 有声チャンクが一つも無かったウィンドウは転写せず破棄。
+            // commit だと無音ハルシネーション + 課金、放置だとサーバー側バッファに
+            // 無音が溜まり続けて次の commit が巨大化するため、明示的に clear する。
+            sendJSON(["type": "input_audio_buffer.clear"])
+        }
+    }
+
+    /// PCM16 (LE) チャンクのピーク振幅。有声判定に使う。
+    static func peakAmplitude(_ pcm16: Data) -> Int16 {
+        pcm16.withUnsafeBytes { raw -> Int16 in
+            let samples = raw.bindMemory(to: Int16.self)
+            var peak: Int16 = 0
+            for s in samples {
+                let v = s == Int16.min ? Int16.max : abs(s)
+                if v > peak { peak = v }
+            }
+            return peak
+        }
     }
 
     /// PCM16 (24kHz mono LE) の生バイトを送信。接続確立済みでなければ無視。
@@ -304,11 +401,14 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
             "audio": base64
         ]
         sendJSON(message)
+        let isVoiced = Self.peakAmplitude(pcm16) >= Self.voicePeakThreshold
         // 送信統計を最初の100チャンクと、以降は1秒(=24,000サンプル=48,000bytes)毎に
         // ログする想定で、500回ごと/100回ごとに残す
         stateLock.lock()
         sendCount += 1
         sendBytes += pcm16.count
+        _bytesSinceLastCommit += pcm16.count
+        if isVoiced { _voiceSinceLastCommit = true }
         let count = sendCount
         let bytes = sendBytes
         stateLock.unlock()
@@ -390,6 +490,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
             DebugLog.log("[\(speaker.rawValue)] session established")
 
         case "session.updated", "transcription_session.updated":
+            // commit ループは session.update (turn_detection: null) の反映確定後に
+            // 開始する。session.created 直後に始めると、server_vad が有効なままの
+            // 一瞬に commit してエラーになるレースがあり、update 拒否時には
+            // 4秒周期のエラースパムになるため。
+            startCommitLoop()
             DebugLog.log("[\(speaker.rawValue)] session updated")
 
         case "conversation.item.input_audio_transcription.delta":
@@ -433,6 +538,22 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 Task { @MainActor in
                     TranscriptStore.shared.completeItem(itemId: itemId, finalText: transcript, speaker: speaker)
                 }
+                // GPT-4.1 mini でフィラー除去・言い直し整形 + 対訳 (英語原文のみ)。
+                // 生テキストを先に表示し、結果が届き次第そっと置き換える。
+                // 失敗時は生テキストのまま (clean が nil を返す)。
+                if TranscriptCleaner.shouldClean(transcript) {
+                    let apiKey = self.apiKey
+                    Task.detached {
+                        guard let result = await TranscriptCleaner.clean(transcript, apiKey: apiKey) else { return }
+                        await MainActor.run {
+                            TranscriptStore.shared.updateFinalText(
+                                itemId: itemId,
+                                text: result.cleaned,
+                                translation: result.translationJa
+                            )
+                        }
+                    }
+                }
             }
             // コスト累計
             if let usage = obj["usage"] as? [String: Any] {
@@ -448,6 +569,14 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
             let errObj = obj["error"] as? [String: Any]
             let errMsg = errObj?["message"] as? String ?? "unknown"
             let errType = errObj?["type"] as? String
+            let errCode = errObj?["code"] as? String
+            // 空バッファ commit の拒否は実害なし (音声は失われない)。
+            // send 失敗等でクライアント側カウントと実バッファが稀にずれた場合に
+            // 出るだけなので、UI に出さずログだけ残して抜ける。
+            if errCode == "input_audio_buffer_commit_empty" {
+                DebugLog.log("[\(speaker.rawValue)] benign: commit on empty buffer (skipped)")
+                break
+            }
             let recoverable = ErrorMessageHumanizer.isRecoverableAPIErrorType(errType)
             DebugLog.log("[\(speaker.rawValue)] API error type=\(errType ?? "?") recoverable=\(recoverable) msg=\(errMsg)")
             resumeConnectionContinuation(with: .failure(TranscriptionClientError.sessionNotEstablished))
