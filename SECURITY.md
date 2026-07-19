@@ -10,6 +10,6 @@
 
 ## 注意事項
 
-- OpenAI API キーは macOS Keychain (`com.meetscribe.app` サービス) に保存されます。
-- 文字起こし用の音声は OpenAI Realtime API に送信されます。組織の承認なしに機密会議で使用しないでください。
+- OpenAI/xAI APIキーはプロバイダー別アカウントとしてmacOS Keychain（`com.meetscribe.app`サービス）に保存されます。
+- 文字起こし用の音声と整形・翻訳・Copilot用のテキストは、設定画面で選択したOpenAIまたはxAIのAPIへ送信されます。組織の承認なしに機密会議で使用しないでください。
 - Q&A クエリは Claude Code CLI サブプロセス経由でローカル実行されます。

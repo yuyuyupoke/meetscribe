@@ -51,6 +51,23 @@ final class TranscriptStore {
         }
     }
 
+    /// 累積型の途中結果でテキスト全体を置換する (xAI transcript.partial 用)。
+    /// appendDelta と違い、同じpartialを重複追記しない。
+    func replacePartial(_ text: String, itemId: String, speaker: SpeakerLabel) {
+        if let idx = entries.firstIndex(where: { $0.id == itemId }) {
+            guard !entries[idx].isFinal else { return }
+            entries[idx].text = text
+        } else {
+            entries.append(TranscriptEntry(
+                id: itemId,
+                speaker: speaker,
+                text: text,
+                createdAt: Date(),
+                isFinal: false
+            ))
+        }
+    }
+
     /// 確定した文字起こしで上書き
     func completeItem(itemId: String, finalText: String, speaker: SpeakerLabel) {
         if let idx = entries.firstIndex(where: { $0.id == itemId }) {
@@ -77,13 +94,23 @@ final class TranscriptStore {
         }
     }
 
+    /// フィルター対象になった途中結果を削除する。
+    func removeItem(itemId: String) {
+        entries.removeAll { $0.id == itemId }
+    }
+
     func clear() {
         entries.removeAll()
     }
 
-    /// 会議の文字起こしのみ (マイク + システム音声)
+    /// 会議の文字起こしのみ (マイク + システム音声)。
+    /// 空白・改行のみのエントリ (無音区間の空 delta 等) は表示・保存・Q&A の
+    /// どこにも流さない。
     var meetingEntries: [TranscriptEntry] {
-        entries.filter { $0.speaker == .me || $0.speaker == .other }
+        entries.filter {
+            ($0.speaker == .me || $0.speaker == .other)
+                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     /// タイトル生成・要約に渡すための会議文字起こしテキスト

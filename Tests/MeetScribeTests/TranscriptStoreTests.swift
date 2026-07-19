@@ -49,6 +49,21 @@ final class TranscriptStoreTests: XCTestCase {
 
     // MARK: - completeItem
 
+    func test_replacePartial_existingItem_replacesInsteadOfAppending() {
+        store.replacePartial("Hello", itemId: "xai-1", speaker: .me)
+        store.replacePartial("Hello world", itemId: "xai-1", speaker: .me)
+
+        XCTAssertEqual(store.entries.count, 1)
+        XCTAssertEqual(store.entries[0].text, "Hello world")
+        XCTAssertFalse(store.entries[0].isFinal)
+    }
+
+    func test_replacePartial_doesNotOverwriteFinalItem() {
+        store.completeItem(itemId: "xai-1", finalText: "final", speaker: .me)
+        store.replacePartial("late partial", itemId: "xai-1", speaker: .me)
+        XCTAssertEqual(store.entries[0].text, "final")
+    }
+
     func test_completeItem_existingItem_overwritesText() {
         store.appendDelta("partial", itemId: "item-1", speaker: .me)
         store.completeItem(itemId: "item-1", finalText: "complete text", speaker: .me)
@@ -104,6 +119,12 @@ final class TranscriptStoreTests: XCTestCase {
         store.updateFinalText(itemId: "item-1", text: "こんにちは", translation: nil)
 
         XCTAssertNil(store.entries[0].translation)
+    }
+
+    func test_removeItem_removesMatchingPartial() {
+        store.replacePartial("hallucination", itemId: "xai-1", speaker: .other)
+        store.removeItem(itemId: "xai-1")
+        XCTAssertTrue(store.entries.isEmpty)
     }
 
     // MARK: - meetingEntries filter

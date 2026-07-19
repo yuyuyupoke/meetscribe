@@ -115,6 +115,28 @@ final class CostTrackerTests: XCTestCase {
         XCTAssertEqual(CostTracker.extractCost(from: usage), 0.0, accuracy: 1e-12)
     }
 
+    // MARK: - xAI Streaming STT
+
+    func test_xAIStreamingCost_thirtyMinutesOneStream_isTenCents() {
+        let bytes = 16_000 * 2 * 30 * 60
+        let result = CostTracker.xAIStreamingCost(audioBytes: bytes, sampleRate: 16_000)
+        XCTAssertEqual(result, 0.10, accuracy: 1e-12)
+    }
+
+    func test_xAIStreamingCost_twoThirtyMinuteStreams_isTwentyCents() {
+        let bytesPerStream = 16_000 * 2 * 30 * 60
+        let result = 2 * CostTracker.xAIStreamingCost(
+            audioBytes: bytesPerStream,
+            sampleRate: 16_000
+        )
+        XCTAssertEqual(result, 0.20, accuracy: 1e-12)
+    }
+
+    func test_xAIStreamingCost_invalidInput_isZero() {
+        XCTAssertEqual(CostTracker.xAIStreamingCost(audioBytes: 0, sampleRate: 16_000), 0)
+        XCTAssertEqual(CostTracker.xAIStreamingCost(audioBytes: 100, sampleRate: 0), 0)
+    }
+
     // MARK: - Rate constants
 
     func test_rates_matchDocumentedPricing() {
@@ -122,5 +144,6 @@ final class CostTrackerTests: XCTestCase {
         XCTAssertEqual(CostTracker.audioInputRate, 6.00 / 1_000_000, accuracy: 1e-15)
         XCTAssertEqual(CostTracker.outputRate, 10.00 / 1_000_000, accuracy: 1e-15)
         XCTAssertEqual(CostTracker.realtimeWhisperRatePerSecond, 0.017 / 60, accuracy: 1e-15)
+        XCTAssertEqual(CostTracker.xAIStreamingRatePerSecond, 0.20 / 3_600, accuracy: 1e-15)
     }
 }

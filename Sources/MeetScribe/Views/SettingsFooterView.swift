@@ -11,6 +11,13 @@ struct SettingsFooterView: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            // ウィンドウが狭くてもAI切替とキー設定を最優先で表示する。
+            providerControl
+                .layoutPriority(2)
+            Divider().frame(height: 12)
+            apiKeyControl
+                .layoutPriority(2)
+            Divider().frame(height: 12)
             folderControl(
                 icon: state.meetingsSaveDirectoryURL == nil ? "exclamationmark.triangle.fill" : "tray.full.fill",
                 label: "議事録",
@@ -33,8 +40,6 @@ struct SettingsFooterView: View {
             languageControl
             Divider().frame(height: 12)
             translationToggle
-            Divider().frame(height: 12)
-            apiKeyControl
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -95,7 +100,7 @@ struct SettingsFooterView: View {
         }
     }
 
-    /// 文字起こし言語の切替。Auto = OpenAI 側の自動検出 (language パラメータ省略)。
+    /// 文字起こし言語の切替。Auto = API側の自動検出 (languageパラメータ省略)。
     /// 録音中に変えても現セッションには効かず、次回の録音開始から適用される。
     private var languageControl: some View {
         HStack(spacing: 4) {
@@ -113,6 +118,26 @@ struct SettingsFooterView: View {
             .fixedSize()
         }
         .help("文字起こしの言語。Auto = 発話から自動検出。次回の録音開始から適用")
+    }
+
+    /// 文字起こし・整形・翻訳・Copilotへ一貫して使うプロバイダー。
+    private var providerControl: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "network")
+                .foregroundStyle(.blue)
+                .font(.system(size: 12))
+            Picker("", selection: $state.selectedProvider) {
+                ForEach(AIProvider.allCases) { provider in
+                    Text(provider.shortDisplayName).tag(provider)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .labelsHidden()
+            .fixedSize()
+            .accessibilityIdentifier("footer-provider-picker")
+        }
+        .help("会議に使うAIプロバイダー。録音中の変更は次回の会議から適用されます")
     }
 
     /// 対訳表示 (英語の発話に日本語訳を併記) の ON/OFF。
@@ -136,7 +161,7 @@ struct SettingsFooterView: View {
 
     // MARK: - API Key 管理 (常時アクセス可能)
 
-    /// OpenAI API Key の登録・変更。セットアップ完了後は SetupSectionView が
+    /// OpenAI/xAI API Key の登録・変更。セットアップ完了後は SetupSectionView が
     /// 消えるため、いつでも触れるようフッターに常設する。
     private var apiKeyControl: some View {
         Button(action: { showAPIKeyPopover.toggle() }) {
@@ -147,30 +172,47 @@ struct SettingsFooterView: View {
                 Text("APIキー:")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                Text(state.hasAPIKey ? "設定済み" : "未設定")
+                Text("\(state.selectedProvider.shortDisplayName) \(state.hasAPIKey ? "設定済み" : "未設定")")
                     .font(.system(size: 10))
                     .foregroundStyle(state.hasAPIKey ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.7))
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("OpenAI API Key を登録・変更（クリックで入力欄を開く）")
+        .help("OpenAI / xAI API Key を登録・変更（クリックで入力欄を開く）")
         .popover(isPresented: $showAPIKeyPopover, arrowEdge: .top) {
             apiKeyEditor
         }
     }
 
     private var apiKeyEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("OpenAI API Key")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("API Keys")
                 .font(.system(size: 11, weight: .semibold))
-            APIKeyEditorView(
-                state: state,
-                onSaved: { showAPIKeyPopover = false },
-                fieldWidth: 260
-            )
+            ForEach(AIProvider.allCases) { provider in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: state.hasAPIKey(for: provider)
+                              ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(state.hasAPIKey(for: provider) ? Color.green : .secondary)
+                        Text(provider.displayName)
+                            .font(.system(size: 10, weight: .medium))
+                        Spacer()
+                        Text(state.hasAPIKey(for: provider) ? "設定済み" : "未設定")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    APIKeyEditorView(
+                        state: state,
+                        provider: provider,
+                        fieldWidth: 280
+                    )
+                }
+                if provider != AIProvider.allCases.last { Divider() }
+            }
         }
         .padding(12)
+        .frame(width: 340)
     }
 
     static func tildePath(_ url: URL) -> String {

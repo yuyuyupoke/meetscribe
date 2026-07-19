@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- OpenAIとxAIのAPIキーをKeychainへ個別保存し、設定GUIからプロバイダーを選択可能にした
+- xAI Grok Speech to TextのStreaming WebSocket（16kHz PCM、partial/final対応）を追加
+- xAI選択時は整形・日本語対訳・Catchup・全体像生成を`grok-4.3`へ統一
+- 議事録frontmatterへ`provider`と`assistantModel`を記録
+
+### Changed
+
+- プロバイダー選択を会議開始時に固定し、自動再接続でも同じAPIキー・モデルを使用
+- xAI Streaming STTの送信音声秒数に基づくコスト表示を追加
+
 ## [1.0.0] - 2026-06-09
 
 Initial public release.

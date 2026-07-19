@@ -62,6 +62,26 @@ final class PCMConverterTests: XCTestCase {
         XCTAssertLessThan(data.count, expectedBytes + 100)
     }
 
+    func test_convert_48kHzToXAITarget_produces16kHzData() {
+        let buffer = TestHelpers.makeSineBuffer(
+            frequency: 440,
+            amplitude: 0.5,
+            sampleRate: 48_000,
+            frameCount: 4_800
+        )
+        let converter = PCMConverter(
+            sourceFormat: buffer.format,
+            targetSampleRate: AIProvider.xAI.transcriptionSampleRate
+        )!
+        let data = converter.convert(buffer)
+
+        XCTAssertEqual(converter.outputSampleRate, 16_000)
+        XCTAssertNotNil(data)
+        // 100ms × 16kHz × PCM16 = 約3,200 bytes
+        XCTAssertGreaterThan(data?.count ?? 0, 3_100)
+        XCTAssertLessThan(data?.count ?? 0, 3_300)
+    }
+
     func test_convert_44100HzToTarget_producesData() {
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,

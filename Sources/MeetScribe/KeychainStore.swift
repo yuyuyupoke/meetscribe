@@ -1,10 +1,11 @@
 import Foundation
 import Security
 
-/// macOS Keychain を使って OpenAI API Key を安全に保存する。
+/// macOS Keychain を使ってプロバイダー別の API Key を安全に保存する。
 enum KeychainStore {
     static let service = "com.meetscribe.app"
-    static let account = "openai-api-key"
+    /// 既存セットアップスクリプトとの互換用。OpenAI account は変更しない。
+    static let account = AIProvider.openAI.keychainAccount
 
     enum KeychainError: Error, LocalizedError {
         case saveFailed(OSStatus)
@@ -16,21 +17,21 @@ enum KeychainStore {
         }
     }
 
-    static func save(_ value: String) throws {
+    static func save(_ value: String, for provider: AIProvider) throws {
         let data = Data(value.utf8)
 
         // 既存エントリ削除（上書き）
         let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: provider.keychainAccount
         ]
         SecItemDelete(deleteQuery as CFDictionary)
 
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: provider.keychainAccount,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
@@ -40,11 +41,11 @@ enum KeychainStore {
         }
     }
 
-    static func read() -> String? {
+    static func read(for provider: AIProvider) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: provider.keychainAccount,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -58,7 +59,15 @@ enum KeychainStore {
         return value
     }
 
-    static var hasAPIKey: Bool {
-        read() != nil
+    static func hasAPIKey(for provider: AIProvider) -> Bool {
+        guard let value = read(for: provider) else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    // MARK: - OpenAI互換API
+
+    /// 既存の利用箇所・セットアップスクリプトとのソース互換を維持する。
+    static func save(_ value: String) throws { try save(value, for: .openAI) }
+    static func read() -> String? { read(for: .openAI) }
+    static var hasAPIKey: Bool { hasAPIKey(for: .openAI) }
 }

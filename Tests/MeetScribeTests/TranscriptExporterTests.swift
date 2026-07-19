@@ -49,6 +49,26 @@ final class TranscriptExporterTests: XCTestCase {
         XCTAssertTrue(content.contains("date:"))
         XCTAssertTrue(content.contains("model: gpt-4o-transcribe"))
         XCTAssertTrue(content.contains("cost: $0.0042"))
+        XCTAssertTrue(content.contains("provider: openai"))
+        XCTAssertTrue(content.contains("assistantModel: gpt-4.1-mini"))
+    }
+
+    func test_render_xAI_containsProviderAndBothModels() {
+        let record = MeetingRecord(
+            startedAt: Date(timeIntervalSince1970: 0),
+            endedAt: Date(timeIntervalSince1970: 60),
+            title: "Grok Meeting",
+            meetingEntries: [],
+            totalCostUSD: 0.01,
+            model: AIProvider.xAI.transcriptionModel,
+            provider: .xAI,
+            assistantModel: AIProvider.xAI.chatModel
+        )
+        let content = TranscriptExporter.render(record: record)
+
+        XCTAssertTrue(content.contains("provider: xai"))
+        XCTAssertTrue(content.contains("model: Grok Speech to Text"))
+        XCTAssertTrue(content.contains("assistantModel: grok-4.3"))
     }
 
     func test_render_containsTitle() {

@@ -18,10 +18,7 @@ struct ContentView: View {
                 HeaderView(state: state)
                 Divider().opacity(0.3)
                 if !setupComplete {
-                    SetupSectionView(
-                        state: state,
-                        hasAPIKey: $state.hasAPIKey
-                    )
+                    SetupSectionView(state: state)
                     Divider().opacity(0.3)
                 }
                 HSplitView {

@@ -19,8 +19,9 @@ MeetScribe は、マイク音声とシステム音声を並列で文字起こし
 
 ## Features
 
-- **デュアルストリーム文字起こし** — マイクとシステム音声を独立にキャプチャし、話者ラベル付きで OpenAI `gpt-realtime-whisper` にストリーミング。
-- **インライン整形・翻訳** — 確定したセグメントを `gpt-4.1-mini` でフィラー除去・言い直し統合。原文が日本語以外なら日本語訳を同時に生成し、原文の下に併記。
+- **選べるAIプロバイダー** — OpenAI / xAIを設定画面で切り替え。文字起こし・整形・翻訳・Copilotを会議単位で同じプロバイダーへ統一。
+- **デュアルストリーム文字起こし** — マイクとシステム音声を独立にキャプチャし、OpenAI `gpt-realtime-whisper` または xAI Grok Speech to Textへ話者ラベル付きでストリーミング。
+- **インライン整形・翻訳** — OpenAI選択時は`gpt-4.1-mini`、xAI選択時は`grok-4.3`でフィラー除去・言い直し統合・日本語対訳を生成。
 - **Copilot パネル** — ボタン押下で直近 1/3/5/10 分の発話を日本語で要約する「Catchup」と、発話量・経過時間トリガーで自動更新される「全体像」（目的・議題・現在地）。
 - **自動タイトル生成** — 停止時に `claude -p` 経由で Claude が会議タイトルを生成し、`YYYY-MM-DD_HH-mm_<title>.md` として保存。
 - **フローティングパネル** — 常に最前面、サイズ可変、画面共有から非表示（ステルスウィンドウ）。
@@ -32,11 +33,11 @@ MeetScribe は、マイク音声とシステム音声を並列で文字起こし
 | | |
 |---|---|
 | OS | macOS 14 (Sonoma) 以降 |
-| OpenAI | `gpt-realtime-whisper`（文字起こし）と `gpt-4.1-mini`（整形・翻訳・Copilot）にアクセス可能な API キー |
+| AI API | OpenAI（`gpt-realtime-whisper` + `gpt-4.1-mini`）またはxAI（Grok Speech to Text + `grok-4.3`）のAPIキー。両方登録してGUIで切り替え可能 |
 | Claude Code | `$PATH` 上の `claude` CLI（会議タイトル生成のみに使用。Pro または Max サブスク推奨） |
 | 権限 | マイク、画面収録 |
 
-コスト目安: 文字起こし単体で会議 1 時間あたり約 $0.7（2 ストリーム並列）。これに加えて、セグメント整形・翻訳と Copilot パネル（Catchup 要約・全体像自動更新）の利用分だけ `gpt-4.1-mini` の追加費用（$0.40/M 入力・$1.60/M 出力）が発生する。
+コスト目安: xAI Streaming STTは音声1時間あたり$0.20なので、30分会議を2ストリームで処理した文字起こし費は最大約$0.20。OpenAIは現行品質・互換性を優先して`gpt-realtime-whisper`を維持する。いずれも整形・翻訳・Copilotのテキストトークン料金は別途発生する。
 
 ## Install
 
@@ -68,7 +69,7 @@ cd meetscribe
 
 ## Usage
 
-初回起動時に OpenAI キー、出力フォルダ、必要に応じてナレッジフォルダを設定する。資格情報は Keychain に保存される。
+初回起動時にAIプロバイダーを選び、そのAPIキー、出力フォルダ、必要に応じてナレッジフォルダを設定する。OpenAI/xAIのキーは別々にKeychainへ保存され、フッターの設定からいつでも追加・変更できる。
 
 **会議を録音する**
 
@@ -102,22 +103,22 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.p
 │  │ AVAudioEngine│   │  ScreenCaptureKit  │   │   AppKit UI     │  │
 │  │     mic      │   │   system audio     │   │  float panel    │  │
 │  └──────┬───────┘   └─────────┬──────────┘   └────────┬────────┘  │
-│         │  PCM 24kHz mono     │                        │          │
+│         │  PCM 24/16kHz mono  │                        │          │
 │         ▼                     ▼                        │          │
 │  ┌──────────────────────────────────┐                  │          │
-│  │ OpenAI Realtime API (WebSocket)  │                  │          │
-│  │  gpt-realtime-whisper            │                  │          │
+│  │ OpenAI Realtime / xAI STT        │                  │          │
+│  │  Whisper / Grok Speech to Text   │                  │          │
 │  └────────────────┬─────────────────┘                  │          │
 │                   │ delta / completed                  │          │
 │                   ▼                                    │          │
 │  ┌─────────────────────┐    ┌───────────────────────┐  │          │
 │  │ TranscriptCleaner   │───▶│ TranscriptStore        │──┤          │
-│  │  gpt-4.1-mini        │    └──────┬─────────────────┘  │          │
+│  │ GPT-4.1 mini/Grok 4.3│    └──────┬─────────────────┘  │          │
 │  │  整形 + 対訳         │           │                    │          │
 │  └─────────────────────┘           ▼                    │          │
 │                          ┌─────────────────────┐         │          │
 │                          │ CopilotController   │─────────┤          │
-│                          │  gpt-4.1-mini        │         │          │
+│                          │ GPT-4.1 mini/Grok 4.3│         │          │
 │                          │  Catchup要約 / 全体像 │         │          │
 │                          └─────────────────────┘         │          │
 │  ┌─────────────────────┐                                 │          │
@@ -132,10 +133,11 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.p
 | `AudioSession.swift` | セッションのライフサイクル |
 | `MicrophoneCapture.swift` | `AVAudioEngine` + Voice Processing |
 | `SystemAudioCapture.swift` | `ScreenCaptureKit` タップ |
-| `TranscriptionClient.swift` | OpenAI Realtime WebSocket（`gpt-realtime-whisper`） |
-| `TranscriptCleaner.swift` | 確定セグメントの整形・対訳（`gpt-4.1-mini`） |
+| `AIProvider.swift` | プロバイダー別エンドポイント・モデル・料金・サンプルレート |
+| `TranscriptionClient.swift` | OpenAI / xAI Streaming STT WebSocket |
+| `TranscriptCleaner.swift` | 選択プロバイダーによる確定セグメントの整形・対訳 |
 | `CopilotController.swift` | Catchup 要約・全体像自動更新のロジック統括 |
-| `OpenAIChatClient.swift` | `gpt-4.1-mini` chat/completions 共通クライアント |
+| `OpenAIChatClient.swift` | OpenAI互換chat/completions共通クライアント（OpenAI / xAI） |
 | `ClaudeQAClient.swift` | Claude CLI サブプロセス（会議タイトル生成のみ） |
 | `TranscriptExporter.swift` | Markdown レンダリング |
 | `FloatingPanel.swift` | `NSWindow` フローティングパネル |
@@ -157,7 +159,7 @@ MeetScribe で時間を節約できたなら、[note で開発を応援する](h
 
 ## Disclaimer
 
-MeetScribe は個人が開発した非公式プロジェクトであり、Anthropic, PBC および OpenAI, Inc. とは一切関係がなく、これらの企業による承認・提携・後援を受けていません。「Claude」「OpenAI」「gpt-realtime-whisper」等は各社の商標です。
+MeetScribe は個人が開発した非公式プロジェクトであり、Anthropic, PBC、OpenAI, Inc.、xAIとは一切関係がなく、これらの企業による承認・提携・後援を受けていません。「Claude」「OpenAI」「Grok」「gpt-realtime-whisper」等は各社の商標です。
 
 会議タイトル生成機能はユーザーのマシン上で Claude Code CLI (`claude -p`) を呼び出し、ユーザー自身の Claude サブスクリプションを使用します。サブスクリプションの利用は [Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms) に従う必要があります。本ソフトウェアの利用は自己責任で行ってください。
 

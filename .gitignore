@@ -36,3 +36,9 @@ scripts/dev-only/
 # Editor
 .vscode/
 .idea/
+
+# Claude Code local workspace (design discussions, internal notes)
+.claude/
+
+# Local experiments (benchmark data, personal audio transcripts)
+experiments/

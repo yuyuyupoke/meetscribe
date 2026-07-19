@@ -46,10 +46,10 @@ enum ErrorMessageHumanizer {
     /// 該当パターンが無ければ OpenAI 側の原文メッセージをそのまま返す。
     static func humanizeAPIError(type: String?, code: String?, message: String) -> String {
         if code == "invalid_api_key" || type == "authentication_error" {
-            return "OpenAI APIキーが正しくない、または権限がありません。設定画面でキーを確認してください"
+            return "APIキーが正しくない、または権限がありません。設定画面で選択中プロバイダーのキーを確認してください"
         }
         if code == "insufficient_quota" || code == "billing_hard_limit_reached" {
-            return "OpenAIの利用上限に達しています。アカウントの請求設定を確認してください"
+            return "APIの利用上限に達しています。選択中プロバイダーの請求設定を確認してください"
         }
         return message
     }
@@ -57,13 +57,13 @@ enum ErrorMessageHumanizer {
     private static func humanizeURLError(_ err: URLError) -> String {
         switch err.code {
         case .timedOut:
-            return "接続がタイムアウトしました (ネット遅延 or OpenAI側の応答遅延)"
+            return "接続がタイムアウトしました (ネット遅延またはAPI側の応答遅延)"
         case .notConnectedToInternet:
             return "インターネットに接続されていません"
         case .networkConnectionLost:
             return "ネットワーク接続が切れました"
         case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
-            return "OpenAI サーバーに到達できません (DNS / ファイアウォール)"
+            return "文字起こしサーバーに到達できません (DNS / ファイアウォール)"
         case .userAuthenticationRequired, .userCancelledAuthentication:
             return "APIキー認証エラー"
         case .badServerResponse:

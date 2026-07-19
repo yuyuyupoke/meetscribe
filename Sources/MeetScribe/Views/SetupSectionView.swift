@@ -5,9 +5,7 @@ import AppKit
 /// すべて許可されて API Key も設定済みなら ContentView 側で非表示になる。
 struct SetupSectionView: View {
     let state: AppState
-    @Binding var hasAPIKey: Bool
-    /// 登録済みキーの変更モード。hasAPIKey を false に倒すと canStart まで
-    /// 無効化されてしまうため、編集状態は別フラグで持つ。
+    /// 登録済みキーの変更モード。選択中プロバイダーごとに管理する。
     @State private var isEditingAPIKey = false
     /// claude CLI の検出結果。nil = チェック中。`which` フォールバックが
     /// プロセスを起動するためバックグラウンドで判定する。
@@ -37,6 +35,7 @@ struct SetupSectionView: View {
                 current: state.screenRecordingPermission,
                 action: requestScreen
             )
+            providerRow
             apiKeyRow
             meetingsFolderRow
             knowledgeFolderRow
@@ -194,13 +193,38 @@ struct SetupSectionView: View {
 
     // MARK: - API Key 行
 
+    private var providerRow: some View {
+        HStack {
+            Image(systemName: "network")
+                .foregroundStyle(.blue)
+            Text("AIプロバイダー")
+                .font(.system(size: 11))
+            Spacer()
+            Picker("", selection: Binding(
+                get: { state.selectedProvider },
+                set: {
+                    state.selectedProvider = $0
+                    isEditingAPIKey = false
+                }
+            )) {
+                ForEach(AIProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 190)
+        }
+        .help("文字起こし・整形・翻訳・Copilotに使うプロバイダー。録音中の変更は次回の会議から適用されます")
+    }
+
     @ViewBuilder
     private var apiKeyRow: some View {
-        if hasAPIKey && !isEditingAPIKey {
+        if state.hasAPIKey && !isEditingAPIKey {
             HStack {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                Text("OpenAI API Key (必須)")
+                Text("\(state.selectedProvider.shortDisplayName) API Key (必須)")
                     .font(.system(size: 11))
                 Spacer()
                 Button("変更") { isEditingAPIKey = true }
@@ -214,12 +238,13 @@ struct SetupSectionView: View {
                     // フォルダ未設定と同じ警告三角で統一する。
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    Text("OpenAI API Key (必須)")
+                    Text("\(state.selectedProvider.shortDisplayName) API Key (必須)")
                         .font(.system(size: 11))
                     Spacer()
                 }
                 APIKeyEditorView(
                     state: state,
+                    provider: state.selectedProvider,
                     onSaved: { isEditingAPIKey = false },
                     onCancel: isEditingAPIKey ? { isEditingAPIKey = false } : nil
                 )

@@ -35,12 +35,34 @@ final class AppState {
     // 直近のエラーメッセージ
     var lastError: String?
 
-    // OpenAI API 累計コスト (USD) — 現セッションのみ、再起動でリセット
+    // 選択中プロバイダーのAPI累計コスト (USD) — 現セッションのみ
     var totalCostUSD: Double = 0.0
 
-    // OpenAI API Key の登録状態 (Keychain と同期)。セットアップセクションと
-    // フッターの両方から参照・更新されるため AppState に一元化する。
-    var hasAPIKey: Bool = KeychainStore.hasAPIKey
+    // 会議に使うプロバイダー。次回の録音開始から適用され、UserDefaultsへ永続化。
+    var selectedProvider: AIProvider = .openAI {
+        didSet { UserDefaults.standard.set(selectedProvider.rawValue, forKey: Self.providerKey) }
+    }
+
+    // Keychain の登録状態をUIへ反映するキャッシュ。キー文字列自体は保持しない。
+    var hasOpenAIAPIKey: Bool = KeychainStore.hasAPIKey(for: .openAI)
+    var hasXAIAPIKey: Bool = KeychainStore.hasAPIKey(for: .xAI)
+
+    /// 選択中プロバイダーのAPIキー登録状態。既存UI/判定との互換名。
+    var hasAPIKey: Bool { hasAPIKey(for: selectedProvider) }
+
+    func hasAPIKey(for provider: AIProvider) -> Bool {
+        switch provider {
+        case .openAI: return hasOpenAIAPIKey
+        case .xAI: return hasXAIAPIKey
+        }
+    }
+
+    func setHasAPIKey(_ value: Bool, for provider: AIProvider) {
+        switch provider {
+        case .openAI: hasOpenAIAPIKey = value
+        case .xAI: hasXAIAPIKey = value
+        }
+    }
 
     // 文字起こし言語 ("auto" = 自動検出, それ以外は ISO-639-1 コード)。
     // 次回の録音開始から適用される。UserDefaults に永続化。
@@ -99,6 +121,10 @@ final class AppState {
     }
 
     private init() {
+        if let rawProvider = UserDefaults.standard.string(forKey: Self.providerKey),
+           let provider = AIProvider(rawValue: rawProvider) {
+            self.selectedProvider = provider
+        }
         if let url = Self.loadFolder(key: Self.meetingsKey) {
             self.meetingsSaveDirectoryURL = url
         }
@@ -118,6 +144,7 @@ final class AppState {
 
     private static let meetingsKey = "meetingsSaveDirectoryBookmark"
     private static let knowledgeKey = "knowledgeFolderBookmark"
+    private static let providerKey = "selectedAIProvider"
     private static let languageKey = "transcriptionLanguage"
 
     /// 言語設定の許容値 (UI の Picker と対応)。UserDefaults 破損対策。
@@ -177,6 +204,14 @@ final class AppState {
         microphonePermission == .granted && screenRecordingPermission == .granted
     }
 
+    /// 録音中にプロバイダーを変えると再接続・整形先が混在するため変更不可。
+    var canChangeProvider: Bool {
+        switch captureStatus {
+        case .idle, .error: return true
+        case .starting, .running, .stopping: return false
+        }
+    }
+
     /// 録音開始できる状態か (権限 + API Key + 議事録保存先 + 開始可能ステータス)
     var canStart: Bool {
         Self.computeCanStart(
@@ -194,6 +229,7 @@ final class AppState {
             microphoneGranted: microphonePermission == .granted,
             screenRecordingGranted: screenRecordingPermission == .granted,
             hasAPIKey: hasAPIKey,
+            providerName: selectedProvider.shortDisplayName,
             saveFolderSet: meetingsSaveDirectoryURL != nil,
             status: captureStatus
         )
@@ -205,12 +241,13 @@ final class AppState {
         microphoneGranted: Bool,
         screenRecordingGranted: Bool,
         hasAPIKey: Bool,
+        providerName: String = "選択中プロバイダー",
         saveFolderSet: Bool,
         status: CaptureStatus
     ) -> String? {
         if !microphoneGranted { return "マイク権限の許可が必要です" }
         if !screenRecordingGranted { return "画面収録権限の許可が必要です" }
-        if !hasAPIKey { return "OpenAI APIキーが未設定です（フッターの🔑から登録）" }
+        if !hasAPIKey { return "\(providerName) APIキーが未設定です（フッターの🔑から登録）" }
         if !saveFolderSet { return "議事録の保存先が未設定です（フッターから選択）" }
         switch status {
         case .starting: return "開始処理中です"

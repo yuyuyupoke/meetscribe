@@ -1,16 +1,15 @@
 import Foundation
 
-/// OpenAI chat/completions (gpt-4.1-mini) の共通クライアント。
+/// OpenAI互換 chat/completions の共通クライアント。
 /// 整形・対訳 (TranscriptCleaner)、Catchup要約、全体像生成が共用する。
 /// コストは呼び出しごとに計算して返す (AppState への計上は呼び出し側)。
 enum OpenAIChatClient {
+    /// 既存テスト・呼び出しとの互換用OpenAIデフォルト値。
     static let model = "gpt-4.1-mini"
 
     // USD per token (2026-07 時点の gpt-4.1-mini 料金: $0.40/M in, $1.60/M out)
     static let inputRate: Double = 0.40 / 1_000_000
     static let outputRate: Double = 1.60 / 1_000_000
-
-    private static let endpoint = URL(string: "https://api.openai.com/v1/chat/completions")!
 
     /// 1回の補完リクエスト。失敗 (HTTPエラー・タイムアウト・パース不能) は text=nil。
     /// - Parameter forceJSON: true なら response_format=json_object を指定
@@ -18,17 +17,18 @@ enum OpenAIChatClient {
         system: String,
         user: String,
         apiKey: String,
+        provider: AIProvider = .openAI,
         timeout: TimeInterval = 20,
         forceJSON: Bool = false
     ) async -> (text: String?, costUSD: Double) {
-        var request = URLRequest(url: endpoint)
+        var request = URLRequest(url: provider.chatEndpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var body: [String: Any] = [
-            "model": model,
+            "model": provider.chatModel,
             "temperature": 0,
             "messages": [
                 ["role": "system", "content": system],
@@ -50,7 +50,7 @@ enum OpenAIChatClient {
                 DebugLog.log("[chat-client] HTTP \(status)")
                 return (nil, 0)
             }
-            return parseResponse(data)
+            return parseResponse(data, provider: provider)
         } catch {
             DebugLog.log("[chat-client] request failed: \(error.localizedDescription)")
             return (nil, 0)
@@ -58,7 +58,10 @@ enum OpenAIChatClient {
     }
 
     /// chat/completions レスポンスから (本文, コストUSD) を抽出する純関数。
-    static func parseResponse(_ data: Data) -> (text: String?, costUSD: Double) {
+    static func parseResponse(
+        _ data: Data,
+        provider: AIProvider = .openAI
+    ) -> (text: String?, costUSD: Double) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return (nil, 0)
         }
@@ -66,7 +69,8 @@ enum OpenAIChatClient {
         if let usage = obj["usage"] as? [String: Any] {
             let input = usage["prompt_tokens"] as? Int ?? 0
             let output = usage["completion_tokens"] as? Int ?? 0
-            cost = Double(input) * inputRate + Double(output) * outputRate
+            cost = Double(input) * provider.chatInputRate
+                + Double(output) * provider.chatOutputRate
         }
         let choices = obj["choices"] as? [[String: Any]]
         let message = choices?.first?["message"] as? [String: Any]

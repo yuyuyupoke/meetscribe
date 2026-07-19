@@ -2,8 +2,8 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
-/// 任意のサンプルレート・ビット深度の PCM を OpenAI Realtime API が要求する
-/// 24kHz 16bit mono PCM (little-endian) に変換する。
+/// 任意のサンプルレート・ビット深度の PCM を各プロバイダーが要求する
+/// サンプルレートの16bit mono PCM (little-endian) に変換する。
 ///
 /// 重要設計: AVAudioConverter のインスタンスは **毎フレーム新規生成する**。
 /// 同一インスタンスを使い回すと、macOS では2回目以降の `convert()` 呼出で
@@ -22,31 +22,52 @@ final class PCMConverter {
     )!
 
     let sourceFormat: AVAudioFormat
+    let outputSampleRate: Double
+    let outputFormat: AVAudioFormat
 
-    init?(sourceFormat: AVAudioFormat) {
+    init?(sourceFormat: AVAudioFormat, targetSampleRate: Double = PCMConverter.targetSampleRate) {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: targetSampleRate,
+            channels: Self.targetChannels,
+            interleaved: true
+        ) else { return nil }
         self.sourceFormat = sourceFormat
+        self.outputSampleRate = targetSampleRate
+        self.outputFormat = format
     }
 
-    /// AVAudioPCMBuffer (任意フォーマット) → 24kHz mono PCM16 LE bytes。
+    /// AVAudioPCMBuffer (任意フォーマット) → 指定sample rateのmono PCM16 LE bytes。
     func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
-        return Self.convertBuffer(buffer)
+        return Self.convertBuffer(buffer, targetFormat: outputFormat)
     }
 
-    /// CMSampleBuffer → 24kHz mono PCM16 LE bytes。
+    /// CMSampleBuffer → 指定sample rateのmono PCM16 LE bytes。
     /// `converterRef` は API 互換のために残してあるが内部では使い回さない。
-    static func convert(_ sampleBuffer: CMSampleBuffer, using converterRef: inout PCMConverter?) -> Data? {
+    static func convert(
+        _ sampleBuffer: CMSampleBuffer,
+        using converterRef: inout PCMConverter?,
+        targetSampleRate: Double = PCMConverter.targetSampleRate
+    ) -> Data? {
         guard let formatDescription = sampleBuffer.formatDescription,
               var asbd = formatDescription.audioStreamBasicDescription else { return nil }
         guard let sourceFormat = AVAudioFormat(streamDescription: &asbd) else { return nil }
-        if converterRef == nil {
-            converterRef = PCMConverter(sourceFormat: sourceFormat)
+        if converterRef == nil || converterRef?.outputSampleRate != targetSampleRate {
+            converterRef = PCMConverter(
+                sourceFormat: sourceFormat,
+                targetSampleRate: targetSampleRate
+            )
         }
         guard let pcmBuffer = sampleBuffer.toPCMBuffer(format: sourceFormat) else { return nil }
-        return convertBuffer(pcmBuffer)
+        guard let targetFormat = converterRef?.outputFormat else { return nil }
+        return convertBuffer(pcmBuffer, targetFormat: targetFormat)
     }
 
     /// AVAudioPCMBuffer の単発変換。AVAudioConverter は毎回新規生成。
-    private static func convertBuffer(_ buffer: AVAudioPCMBuffer) -> Data? {
+    private static func convertBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        targetFormat: AVAudioFormat
+    ) -> Data? {
         guard buffer.frameLength > 0 else { return nil }
         guard let avConverter = AVAudioConverter(from: buffer.format, to: targetFormat) else {
             return nil

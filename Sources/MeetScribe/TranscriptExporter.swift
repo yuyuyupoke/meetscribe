@@ -12,6 +12,8 @@ struct MeetingRecord: Sendable {
     let catchupCards: [CatchupCard]
     let totalCostUSD: Double
     let model: String
+    let provider: AIProvider
+    let assistantModel: String
 
     init(
         startedAt: Date,
@@ -21,7 +23,9 @@ struct MeetingRecord: Sendable {
         overview: MeetingOverview? = nil,
         catchupCards: [CatchupCard] = [],
         totalCostUSD: Double,
-        model: String
+        model: String,
+        provider: AIProvider = .openAI,
+        assistantModel: String? = nil
     ) {
         self.startedAt = startedAt
         self.endedAt = endedAt
@@ -31,6 +35,8 @@ struct MeetingRecord: Sendable {
         self.catchupCards = catchupCards
         self.totalCostUSD = totalCostUSD
         self.model = model
+        self.provider = provider
+        self.assistantModel = assistantModel ?? provider.chatModel
     }
 
     var durationMinutes: Int {
@@ -80,7 +86,9 @@ enum TranscriptExporter {
         lines.append("endedAt: \(timestamp.end)")
         lines.append("duration: \(record.durationMinutes)m")
         lines.append(String(format: "cost: $%.4f", record.totalCostUSD))
+        lines.append("provider: \(record.provider.rawValue)")
         lines.append("model: \(record.model)")
+        lines.append("assistantModel: \(record.assistantModel)")
         lines.append("speakers:")
         lines.append("  - \"自分\"")
         lines.append("  - \"相手\"")

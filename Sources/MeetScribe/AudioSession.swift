@@ -8,15 +8,17 @@ enum AudioFrame {
 }
 
 /// 1ストリーム分の音声処理パイプライン。
-/// PCM 変換 → OpenAI WebSocket への送信を行う。
+/// PCM 変換 → 選択プロバイダーのWebSocketへの送信を行う。
 /// `client` は再接続時に差し替える可能性があるので var + lock 保護。
 private final class TranscriptionPipeline: @unchecked Sendable {
     private let clientLock = NSLock()
     private var _client: TranscriptionClient
     private var converter: PCMConverter?
+    private let targetSampleRate: Double
 
     init(client: TranscriptionClient) {
         self._client = client
+        self.targetSampleRate = client.sampleRate
     }
 
     func replaceClient(_ newClient: TranscriptionClient) {
@@ -29,11 +31,18 @@ private final class TranscriptionPipeline: @unchecked Sendable {
         switch frame {
         case .pcm(let buffer):
             if converter == nil {
-                converter = PCMConverter(sourceFormat: buffer.format)
+                converter = PCMConverter(
+                    sourceFormat: buffer.format,
+                    targetSampleRate: targetSampleRate
+                )
             }
             pcm = converter?.convert(buffer)
         case .sample(let sampleBuffer):
-            pcm = PCMConverter.convert(sampleBuffer, using: &converter)
+            pcm = PCMConverter.convert(
+                sampleBuffer,
+                using: &converter,
+                targetSampleRate: targetSampleRate
+            )
         }
         guard let data = pcm else { return }
         clientLock.lock()
@@ -72,6 +81,8 @@ final class AudioSession {
     /// 設定を変えても再接続ストリームだけ言語が変わる不整合を防ぐ
     /// (UI の「次回の録音開始から適用」との一貫性)。
     private var activeLanguage: String?
+    private var activeProvider: AIProvider?
+    private var activeAPIKey: String?
 
     private init() {}
 
@@ -94,28 +105,52 @@ final class AudioSession {
         AppState.shared.captureStatus = .starting
         AppState.shared.lastError = nil
         AppState.shared.lastSavedURL = nil
+        AppState.shared.totalCostUSD = 0
         TranscriptStore.shared.clear()
+        // singleton (AudioSession) が保持する前処理器は会議間で再利用されるため、
+        // passRate 等の統計を会議単位にリセットする (デバッグログの意味を保つため)。
+        micPreProcessor.resetStats()
+        sysPreProcessor.resetStats()
+        // 前回セッションの残キューが新セッションに紛れ込まないよう防御的に破棄する
+        // (通常は stop()/kill() で処理済みのはず)。
+        await TranscriptCleanerBatcher.shared.discardAll()
 
-        guard let apiKey = KeychainStore.read(), !apiKey.isEmpty else {
+        let provider = AppState.shared.selectedProvider
+        guard let apiKey = KeychainStore.read(for: provider), !apiKey.isEmpty else {
             AppState.shared.captureStatus = .error("API Keyが未設定")
-            AppState.shared.lastError = "OpenAI API Keyを設定してください"
+            AppState.shared.lastError = "\(provider.shortDisplayName) API Keyを設定してください"
             return
         }
 
         let language = AppState.shared.transcriptionLanguageCode
         self.activeLanguage = language
-        let micClient = TranscriptionClient(apiKey: apiKey, speaker: .me, language: language)
-        let sysClient = TranscriptionClient(apiKey: apiKey, speaker: .other, language: language)
+        self.activeProvider = provider
+        self.activeAPIKey = apiKey
+        let micClient = TranscriptionClient(
+            apiKey: apiKey,
+            speaker: .me,
+            language: language,
+            provider: provider
+        )
+        let sysClient = TranscriptionClient(
+            apiKey: apiKey,
+            speaker: .other,
+            language: language,
+            provider: provider
+        )
         do {
             async let micConnect: Void = micClient.connect()
             async let sysConnect: Void = sysClient.connect()
             try await micConnect
             try await sysConnect
         } catch {
-            AppState.shared.lastError = "OpenAI接続失敗: \(error.localizedDescription)"
+            AppState.shared.lastError = "\(provider.shortDisplayName)接続失敗: \(error.localizedDescription)"
             AppState.shared.captureStatus = .error(error.localizedDescription)
             micClient.disconnect()
             sysClient.disconnect()
+            activeLanguage = nil
+            activeProvider = nil
+            activeAPIKey = nil
             return
         }
         self.micClient = micClient
@@ -144,8 +179,13 @@ final class AudioSession {
         }
 
         do {
-            try microphone.start { [micPipeline] buffer, _ in
-                micPipeline.process(.pcm(buffer))
+            try microphone.start { [micPipeline, preProcessor = micPreProcessor] buffer, _ in
+                // ノイズゲート/スペクトル解析を通過したフレームだけ送信パイプラインへ渡す。
+                // VU メーター用レベルは MicrophoneCapture 側で既に生バッファから計測済みなので、
+                // ここでのゲーティングは表示には影響しない。
+                preProcessor.processAndForward(buffer, sampleRate: buffer.format.sampleRate) { gated in
+                    micPipeline.process(.pcm(gated))
+                }
             }
         } catch {
             AppState.shared.lastError = "マイク起動失敗: \(error.localizedDescription)"
@@ -155,8 +195,10 @@ final class AudioSession {
         }
 
         do {
-            try await systemAudio.start { [sysPipeline] sampleBuffer in
-                sysPipeline.process(.sample(sampleBuffer))
+            try await systemAudio.start { [sysPipeline, preProcessor = sysPreProcessor] sampleBuffer in
+                preProcessor.processAndForward(sampleBuffer) { gated in
+                    sysPipeline.process(.sample(gated))
+                }
             }
         } catch {
             AppState.shared.lastError = "システム音起動失敗: \(error.localizedDescription)"
@@ -167,7 +209,7 @@ final class AudioSession {
 
         // 会議開始時刻をマーク + Copilot (全体像の自動更新) 開始 + 無音検知タイマー起動 (10分)
         AppState.shared.meetingStartedAt = Date()
-        CopilotController.shared.startSession()
+        CopilotController.shared.startSession(provider: provider, apiKey: apiKey)
         let detector = SilenceDetector(timeoutMinutes: 10.0) { [weak self] in
             DebugLog.log("[MeetScribe] silence timeout → auto-stop")
             Task { await self?.stop() }
@@ -193,11 +235,16 @@ final class AudioSession {
 
         let startedAt = AppState.shared.meetingStartedAt
         let endedAt = Date()
+        let sessionProvider = activeProvider ?? AppState.shared.selectedProvider
         CopilotController.shared.endSession()
         microphone.stop()
         await systemAudio.stop()
         silenceDetector?.stop()
         silenceDetector = nil
+        await finishTranscriptionClients()
+        // 残っている整形待ちセグメントを必ず処理する。runSaveFlow のタイトル生成
+        // (~15秒) 中に再取得する latestEntries に間に合わせるため、tearDown前に待つ。
+        await TranscriptCleanerBatcher.shared.flushAll()
         tearDown()
         AppState.shared.micLevel = 0.0
         AppState.shared.systemLevel = 0.0
@@ -211,7 +258,12 @@ final class AudioSession {
             return
         }
 
-        await runSaveFlow(startedAt: startedAt, endedAt: endedAt, meetingEntries: meetingEntries)
+        await runSaveFlow(
+            startedAt: startedAt,
+            endedAt: endedAt,
+            meetingEntries: meetingEntries,
+            provider: sessionProvider
+        )
         AppState.shared.meetingStartedAt = nil
     }
 
@@ -225,6 +277,9 @@ final class AudioSession {
         await systemAudio.stop()
         silenceDetector?.stop()
         silenceDetector = nil
+        // 保存しない (結果を捨てる) ので、キュー中のセグメントをLLMに投げず破棄する
+        // (無駄な課金を避ける)。
+        await TranscriptCleanerBatcher.shared.discardAll()
         tearDown()
         TranscriptStore.shared.clear()
         AppState.shared.micLevel = 0.0
@@ -244,6 +299,9 @@ final class AudioSession {
     func shutdownSync() {
         DebugLog.log("[MeetScribe] AudioSession.shutdownSync()")
         CopilotController.shared.endSession()
+        // ベストエフォート (terminate に間に合わなくても実害なし: プロセス終了で
+        // どのみち破棄される。await はしない — runSaveFlow 同様 terminate を待たせない)。
+        Task { await TranscriptCleanerBatcher.shared.discardAll() }
         microphone.stop()        // VPIO を同期解放
         systemAudio.stopSync()   // SCStream をベストエフォート停止
         silenceDetector?.stop()
@@ -258,7 +316,8 @@ final class AudioSession {
     private func runSaveFlow(
         startedAt: Date,
         endedAt: Date,
-        meetingEntries: [TranscriptEntry]
+        meetingEntries: [TranscriptEntry],
+        provider: AIProvider
     ) async {
         AppState.shared.isSavingMeeting = true
         defer { AppState.shared.isSavingMeeting = false }
@@ -281,7 +340,9 @@ final class AudioSession {
             overview: AppState.shared.overview,
             catchupCards: AppState.shared.catchupCards,
             totalCostUSD: AppState.shared.totalCostUSD,
-            model: TranscriptionClient.transcriptionModel
+            model: provider.transcriptionModel,
+            provider: provider,
+            assistantModel: provider.chatModel
         )
         do {
             let url = try TranscriptExporter.save(record, to: AppState.shared.meetingsSaveDirectoryURL)
@@ -294,6 +355,14 @@ final class AudioSession {
     }
 
     // MARK: - リソース解放
+
+    private func finishTranscriptionClients() async {
+        let mic = micClient
+        let sys = sysClient
+        async let finishMic: Void = mic?.finish() ?? ()
+        async let finishSys: Void = sys?.finish() ?? ()
+        _ = await (finishMic, finishSys)
+    }
 
     private func tearDown() {
         // キャプチャエンジンも必ず停止する (二重 stop は各 isRunning ガードで無害)。
@@ -312,6 +381,9 @@ final class AudioSession {
         sysClient = nil
         micPipeline = nil
         sysPipeline = nil
+        activeLanguage = nil
+        activeProvider = nil
+        activeAPIKey = nil
         AppState.shared.reconnectingStreams = []
     }
 
@@ -359,7 +431,9 @@ final class AudioSession {
         setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 接続切れ、再接続中…")
         DebugLog.log("[MeetScribe] reconnect start for \(speaker.rawValue)")
 
-        guard let apiKey = KeychainStore.read(), !apiKey.isEmpty else {
+        guard let provider = activeProvider,
+              let apiKey = activeAPIKey,
+              !apiKey.isEmpty else {
             setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続失敗: APIキー未設定")
             AppState.shared.reconnectingStreams.remove(speaker)
             return
@@ -377,7 +451,8 @@ final class AudioSession {
             let newClient = TranscriptionClient(
                 apiKey: apiKey,
                 speaker: speaker,
-                language: activeLanguage
+                language: activeLanguage,
+                provider: provider
             )
             do {
                 try await newClient.connect()

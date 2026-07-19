@@ -66,7 +66,11 @@ final class AudioPreProcessor: @unchecked Sendable {
         }
 
         // Stage 2: SpectralAnalyzer (optional)
-        if enableSpectral {
+        // NoiseGate が hold 中 (発話終了後、xAI の endpointing=500ms 検出用に無音送信を
+        // 継続している間) は判定をバイパスして必ず通す。バイパスしないと、hold 中に流れる
+        // 無音/定常音バッファが consecutiveNoiseFramesThreshold 超でノイズ判定され除去され、
+        // hold 自体が無効化されて speech_final 発火という主目的を果たせなくなる
+        if enableSpectral && !noiseGate.isInHold {
             let result = spectralAnalyzer.analyze(gatedBuffer, sampleRate: sampleRate)
             if !result.isLikelyVoice {
                 spectralFilteredFrames += 1
@@ -98,6 +102,22 @@ final class AudioPreProcessor: @unchecked Sendable {
             return sampleBuffer
         }
         return nil
+    }
+
+    /// キャプチャのバッファハンドラから直接呼ぶための薄いラッパー。
+    /// ノイズ判定で除去されたフレームは `onPass` を呼ばない
+    /// (= 送信パイプラインに渡らず xAI 課金・OpenAI commit 頻度が減る)。
+    /// サンプルレートは呼び出し元が渡すバッファ自身の format から取れるので、
+    /// AudioSession 側で保持し直す必要がない。
+    func processAndForward(_ buffer: AVAudioPCMBuffer, sampleRate: Double, onPass: (AVAudioPCMBuffer) -> Void) {
+        guard let gated = process(buffer, sampleRate: sampleRate) else { return }
+        onPass(gated)
+    }
+
+    /// CMSampleBuffer 版の `processAndForward`。SystemAudioCapture 向け。
+    func processAndForward(_ sampleBuffer: CMSampleBuffer, onPass: (CMSampleBuffer) -> Void) {
+        guard let gated = process(sampleBuffer) else { return }
+        onPass(gated)
     }
 
     /// 統計をリセット

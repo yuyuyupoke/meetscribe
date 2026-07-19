@@ -12,6 +12,16 @@ enum CostTracker {
     // USD per second (gpt-realtime-whisper: $0.017/分、2026-07 時点)
     static let realtimeWhisperRatePerSecond: Double = 0.017 / 60
 
+    // xAI Streaming STT: $0.20 / audio hour (2026-07時点)
+    static let xAIStreamingRatePerSecond: Double = 0.20 / 3_600
+
+    /// xAIへ送ったPCM16 mono byte数から推定課金を計算する。
+    static func xAIStreamingCost(audioBytes: Int, sampleRate: Double) -> Double {
+        guard audioBytes > 0, sampleRate > 0 else { return 0 }
+        let seconds = Double(audioBytes) / (sampleRate * Double(MemoryLayout<Int16>.size))
+        return seconds * xAIStreamingRatePerSecond
+    }
+
     /// 1 transcription event の usage から USD を計算
     static func cost(
         textInputTokens: Int,

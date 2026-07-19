@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// OpenAI API Key の入力・保存 UI。SetupSectionView (インライン) と
+/// プロバイダー別 API Key の入力・保存 UI。SetupSectionView (インライン) と
 /// SettingsFooterView (ポップオーバー) の両方で共用する。
 /// 表示/非表示トグル (目のアイコン)・前後空白の trim・Keychain 保存・
 /// AppState.hasAPIKey の更新をここに一元化する — 実装が分かれていた頃、
 /// 片方だけ trim 漏れでコピペ由来の壊れたキーが保存されるバグがあった。
 struct APIKeyEditorView: View {
     let state: AppState
+    let provider: AIProvider
     /// 保存成功時に呼ばれる (ポップオーバーを閉じる等)
     var onSaved: (() -> Void)? = nil
     /// 指定するとキャンセルボタンを表示する (登録済みキーの変更モード用)
@@ -26,9 +27,9 @@ struct APIKeyEditorView: View {
             HStack(spacing: 4) {
                 Group {
                     if isRevealed {
-                        TextField("sk-proj-...", text: $input)
+                        TextField(provider.apiKeyPlaceholder, text: $input)
                     } else {
-                        SecureField("sk-proj-...", text: $input)
+                        SecureField(provider.apiKeyPlaceholder, text: $input)
                     }
                 }
                 .textFieldStyle(.roundedBorder)
@@ -56,7 +57,7 @@ struct APIKeyEditorView: View {
                     .font(.system(size: 10))
                 }
             }
-            Text(state.hasAPIKey
+            Text(state.hasAPIKey(for: provider)
                  ? "Keychain に安全に保存されます。保存すると既存のキーを上書きし、次回の録音開始から適用されます。"
                  : "Keychain に安全に保存されます。")
                 .font(.system(size: 9))
@@ -71,12 +72,12 @@ struct APIKeyEditorView: View {
         let key = trimmedInput
         guard !key.isEmpty else { return }
         do {
-            try KeychainStore.save(key)
-            state.hasAPIKey = true
+            try KeychainStore.save(key, for: provider)
+            state.setHasAPIKey(true, for: provider)
             reset()
             onSaved?()
         } catch {
-            state.lastError = "API Key保存失敗: \(error.localizedDescription)"
+            state.lastError = "\(provider.shortDisplayName) API Key保存失敗: \(error.localizedDescription)"
         }
     }
 

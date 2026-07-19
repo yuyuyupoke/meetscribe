@@ -3,7 +3,7 @@ import Foundation
 /// 右カラム「Copilotパネル」のロジック統括。
 /// - Catchup要約: ボタン押下で直近N分の転写を日本語要約してカード追加
 /// - 全体像: 発話が溜まったら自動で「目的/議題/現在地」を更新
-/// LLM はすべて OpenAIChatClient (gpt-4.1-mini)。失敗しても録音・文字起こしには影響しない。
+/// LLM は録音開始時に固定したプロバイダーへ統一。失敗しても録音・文字起こしには影響しない。
 @MainActor
 final class CopilotController {
     static let shared = CopilotController()
@@ -15,7 +15,8 @@ final class CopilotController {
     /// 監視ループの周期
     private static let monitorInterval: TimeInterval = 30
     /// 「発話量」トリガー: 前回更新から新規に確定した文字数がこれを超えたら更新
-    private static let updateCharThreshold = 1_200
+    /// (コスト削減: 1,200→2,400 に緩め、全体像更新のLLM呼び出し頻度を半減)
+    private static let updateCharThreshold = 2_400
     /// 「経過時間」トリガー: 前回更新からこの秒数が経過し、かつ最低限の新規発話があれば更新
     private static let updateTimeThreshold: TimeInterval = 180
     private static let minCharsForTimeUpdate = 200
@@ -28,11 +29,13 @@ final class CopilotController {
     private var catchupTask: Task<Void, Never>?
     private var lastOverviewTextLength = 0
     private var lastOverviewUpdateAt = Date.distantPast
+    private var activeProvider: AIProvider?
+    private var activeAPIKey: String?
 
     // MARK: - セッションライフサイクル
 
     /// 録音開始時に呼ぶ。前セッションの状態をクリアして全体像の監視を開始する。
-    func startSession() {
+    func startSession(provider: AIProvider, apiKey: String) {
         catchupTask?.cancel()
         catchupTask = nil
         AppState.shared.catchupCards = []
@@ -41,6 +44,8 @@ final class CopilotController {
         AppState.shared.isOverviewUpdating = false
         lastOverviewTextLength = 0
         lastOverviewUpdateAt = Date.distantPast
+        activeProvider = provider
+        activeAPIKey = apiKey
 
         monitorTask?.cancel()
         monitorTask = Task { [weak self] in
@@ -60,6 +65,8 @@ final class CopilotController {
         catchupTask = nil
         AppState.shared.isOverviewUpdating = false
         AppState.shared.isCatchupRunning = false
+        activeProvider = nil
+        activeAPIKey = nil
     }
 
     // MARK: - Catchup要約
@@ -75,7 +82,9 @@ final class CopilotController {
     /// 直近 minutes 分の転写を日本語要約してカードを追加する。
     func runCatchup(minutes: Int) async {
         guard !AppState.shared.isCatchupRunning else { return }
-        guard let apiKey = KeychainStore.read(), !apiKey.isEmpty else { return }
+        guard let provider = activeProvider,
+              let apiKey = activeAPIKey,
+              !apiKey.isEmpty else { return }
 
         let now = Date()
         let windowEntries = Self.entriesInWindow(
@@ -109,6 +118,7 @@ final class CopilotController {
             system: Self.catchupSystemPrompt,
             user: transcript,
             apiKey: apiKey,
+            provider: provider,
             timeout: 20
         )
         // セッション終了/再開で cancel された遅延応答は、新セッションの状態
@@ -179,14 +189,17 @@ final class CopilotController {
                 || (elapsed >= Self.updateTimeThreshold && newChars >= Self.minCharsForTimeUpdate)
         }
         guard shouldUpdate else { return }
-        guard let apiKey = KeychainStore.read(), !apiKey.isEmpty else { return }
+        guard let provider = activeProvider,
+              let apiKey = activeAPIKey,
+              !apiKey.isEmpty else { return }
 
         AppState.shared.isOverviewUpdating = true
         defer { AppState.shared.isOverviewUpdating = false }
 
-        // 入力肥大を防ぐため末尾 ~12,000 文字に制限 (冒頭の目的把握は
-        // 既存 overview が引き継ぐため、直近の文脈を優先する)
-        let clipped = String(fullText.suffix(12_000))
+        // 入力肥大を防ぐため末尾 ~6,000 文字に制限 (冒頭の目的把握は
+        // 既存 overview が引き継ぐため、直近の文脈を優先する。コスト削減のため
+        // 12,000→6,000 に縮小: 現在地把握には直近の文脈で十分)
+        let clipped = String(fullText.suffix(6_000))
         let userPrompt: String
         if let current = AppState.shared.overview {
             userPrompt = """
@@ -203,6 +216,7 @@ final class CopilotController {
             system: Self.overviewSystemPrompt,
             user: userPrompt,
             apiKey: apiKey,
+            provider: provider,
             timeout: 20,
             forceJSON: true
         )

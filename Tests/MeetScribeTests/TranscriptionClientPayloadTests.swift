@@ -6,6 +6,34 @@ import XCTest
 /// 言語パラメータの有無を保証する。
 final class TranscriptionClientPayloadTests: XCTestCase {
 
+    func test_openAIEndpoint_keepsRealtimeTranscriptionIntent() {
+        let url = TranscriptionClient.makeEndpoint(provider: .openAI, language: nil)
+        XCTAssertEqual(url.absoluteString, "wss://api.openai.com/v1/realtime?intent=transcription")
+    }
+
+    func test_xAIEndpoint_hasStreamingConfiguration() {
+        let url = TranscriptionClient.makeEndpoint(provider: .xAI, language: "ja")
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let query = Dictionary(uniqueKeysWithValues:
+            (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+
+        XCTAssertEqual(components?.host, "api.x.ai")
+        XCTAssertEqual(components?.path, "/v1/stt")
+        XCTAssertEqual(query["sample_rate"], "16000")
+        XCTAssertEqual(query["encoding"], "pcm")
+        XCTAssertEqual(query["interim_results"], "true")
+        XCTAssertEqual(query["endpointing"], "500")
+        XCTAssertEqual(query["language"], "ja")
+    }
+
+    func test_xAIEndpoint_autoDetect_omitsLanguage() {
+        let url = TranscriptionClient.makeEndpoint(provider: .xAI, language: nil)
+        let names = Set(URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.map(\.name) ?? [])
+        XCTAssertFalse(names.contains("language"))
+    }
+
     private func inputSection(_ payload: [String: Any]) -> [String: Any]? {
         let session = payload["session"] as? [String: Any]
         let audio = session?["audio"] as? [String: Any]

@@ -51,6 +51,49 @@ final class TranscriptCleanerTests: XCTestCase {
         XCTAssertNil(TranscriptCleaner.parseCleanResult("not json"))
         XCTAssertNil(TranscriptCleaner.parseCleanResult(#"{"other": 1}"#))
     }
+
+    // MARK: - parseBatchResult (バッチ応答のパース)
+
+    func test_parseBatchResult_multipleItems_parsesAll() {
+        let json = #"""
+        {"items": [
+            {"id": "a", "cleaned": "今日は会議です", "translation_ja": null},
+            {"id": "b", "cleaned": "Let's start.", "translation_ja": "始めましょう。"}
+        ]}
+        """#
+        let result = TranscriptCleaner.parseBatchResult(json)
+
+        XCTAssertEqual(result?.count, 2)
+        XCTAssertEqual(result?[0].itemId, "a")
+        XCTAssertEqual(result?[0].result.cleaned, "今日は会議です")
+        XCTAssertNil(result?[0].result.translationJa)
+        XCTAssertEqual(result?[1].itemId, "b")
+        XCTAssertEqual(result?[1].result.translationJa, "始めましょう。")
+    }
+
+    func test_parseBatchResult_topLevelMalformed_returnsNil() {
+        XCTAssertNil(TranscriptCleaner.parseBatchResult("not json"))
+        XCTAssertNil(TranscriptCleaner.parseBatchResult(#"{"other": 1}"#))
+    }
+
+    func test_parseBatchResult_oneItemMalformed_skipsOnlyThatItem() {
+        let json = #"""
+        {"items": [
+            {"id": "a", "cleaned": "正常なテキスト", "translation_ja": null},
+            {"id": "b", "cleaned": "", "translation_ja": null},
+            {"missing_id": true}
+        ]}
+        """#
+        let result = TranscriptCleaner.parseBatchResult(json)
+
+        XCTAssertEqual(result?.count, 1)
+        XCTAssertEqual(result?.first?.itemId, "a")
+    }
+
+    func test_parseBatchResult_emptyItemsArray_returnsEmptyNotNil() {
+        let result = TranscriptCleaner.parseBatchResult(#"{"items": []}"#)
+        XCTAssertEqual(result?.count, 0)
+    }
 }
 
 final class OpenAIChatClientTests: XCTestCase {
@@ -95,5 +138,15 @@ final class OpenAIChatClientTests: XCTestCase {
     func test_rates_matchDocumentedPricing() {
         XCTAssertEqual(OpenAIChatClient.inputRate, 0.40 / 1_000_000, accuracy: 1e-15)
         XCTAssertEqual(OpenAIChatClient.outputRate, 1.60 / 1_000_000, accuracy: 1e-15)
+    }
+
+    func test_parseResponse_xAI_usesGrokRates() {
+        let data = makeResponse(content: "ok", promptTokens: 100, completionTokens: 50)
+        let result = OpenAIChatClient.parseResponse(data, provider: .xAI)
+        let expected = 100.0 * AIProvider.xAI.chatInputRate
+            + 50.0 * AIProvider.xAI.chatOutputRate
+
+        XCTAssertEqual(result.text, "ok")
+        XCTAssertEqual(result.costUSD, expected, accuracy: 1e-12)
     }
 }

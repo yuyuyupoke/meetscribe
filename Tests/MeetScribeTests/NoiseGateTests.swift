@@ -15,6 +15,8 @@ final class NoiseGateTests: XCTestCase {
         XCTAssertEqual(config.closeThresholdDB, -60.0)
         XCTAssertGreaterThan(config.openThresholdDB, config.closeThresholdDB,
                              "Open threshold must be higher than close for hysteresis")
+        XCTAssertEqual(config.holdMs, 1000.0,
+                       "xAI endpointing=500msより長く無音を観測させるためhold必須")
     }
 
     func test_systemAudioConfig_hasCorrectDefaults() {
@@ -23,6 +25,21 @@ final class NoiseGateTests: XCTestCase {
         XCTAssertEqual(config.closeThresholdDB, -65.0)
         XCTAssertGreaterThan(config.openThresholdDB, config.closeThresholdDB,
                              "Open threshold must be higher than close for hysteresis")
+        XCTAssertEqual(config.holdMs, 1000.0,
+                       "xAI endpointing=500msより長く無音を観測させるためhold必須")
+    }
+
+    func test_defaultHoldMs_isZero() {
+        // holdMs を明示しないConfigは0 (旧動作=即close) を維持する。
+        // 既存テストの多くはholdMsを明示しないConfigリテラルを使っているため、
+        // ここが0でないと既存の「即座に閉じる」前提のテストが壊れる
+        let config = NoiseGate.Config(
+            openThresholdDB: -30.0,
+            closeThresholdDB: -40.0,
+            attackMs: 0.1,
+            releaseMs: 0.1
+        )
+        XCTAssertEqual(config.holdMs, 0.0)
     }
 
     // MARK: - Initial state
@@ -163,5 +180,124 @@ final class NoiseGateTests: XCTestCase {
         )
         let result = gate.process(quiet, sampleRate: 24000)
         XCTAssertNil(result, "Very quiet noise should be gated")
+    }
+
+    // MARK: - Hold (施策A: xAI endpointing対応)
+
+    private func makeHoldConfig(holdMs: Float) -> NoiseGate.Config {
+        NoiseGate.Config(
+            openThresholdDB: -30.0,
+            closeThresholdDB: -40.0,
+            attackMs: 0.1,
+            releaseMs: 0.1,
+            holdMs: holdMs
+        )
+    }
+
+    // frameCount=1024, sampleRate=24000 → 1フレーム ≈ 42.7ms
+
+    func test_hold_keepsGateOpenAndPassingBuffer_whileWithinHoldPeriod() {
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 100.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .open)
+
+        let silent = TestHelpers.makeSilentBuffer(sampleRate: 24000, frameCount: 1024)
+        // 2フレーム分 (≈85ms) はholdMs(100ms)未満 → 閉じ条件成立後もopenを維持し送信継続
+        let result1 = gate.process(silent, sampleRate: 24000)
+        XCTAssertEqual(gate.state, .open, "hold期間中はcloseに遷移しない")
+        XCTAssertNotNil(result1, "hold期間中は送信を継続する")
+
+        let result2 = gate.process(silent, sampleRate: 24000)
+        XCTAssertEqual(gate.state, .open, "hold期間中はcloseに遷移しない")
+        XCTAssertNotNil(result2, "hold期間中は送信を継続する")
+    }
+
+    func test_hold_closesAfterHoldPeriodExceeded() {
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 100.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .open)
+
+        let silent = TestHelpers.makeSilentBuffer(sampleRate: 24000, frameCount: 1024)
+        // holdMs(100ms)を十分超えるフレーム数を流す → release(0.1ms)も即座に完了しclosedへ
+        for _ in 0..<10 { _ = gate.process(silent, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .closed, "hold期間超過後は無音でゲートが閉じる")
+    }
+
+    func test_hold_cancelsAndResetsIfSignalResumesBeforeHoldExpires() {
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 100.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        let silent = TestHelpers.makeSilentBuffer(sampleRate: 24000, frameCount: 1024)
+
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .open)
+
+        // hold中(1フレーム≈43ms < 100ms)に音声が戻る → holdカウントがリセットされopen維持
+        _ = gate.process(silent, sampleRate: 24000)
+        _ = gate.process(loud, sampleRate: 24000)
+        XCTAssertEqual(gate.state, .open)
+
+        // リセットされているはずなので、直後にもう1フレームだけ無音を流しても
+        // (以前の残り + 今回では超えない量なら) まだclosingへ遷移しない
+        let result = gate.process(silent, sampleRate: 24000)
+        XCTAssertEqual(gate.state, .open, "音声再開でholdカウントがリセットされている")
+        XCTAssertNotNil(result)
+    }
+
+    func test_isInHold_falseWhileFullyOpenWithSignal() {
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 100.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .open)
+        XCTAssertFalse(gate.isInHold, "音声継続中はholdではない")
+    }
+
+    func test_isInHold_trueWhileHoldPeriodActive() {
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 100.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+
+        let silent = TestHelpers.makeSilentBuffer(sampleRate: 24000, frameCount: 1024)
+        _ = gate.process(silent, sampleRate: 24000)
+        XCTAssertEqual(gate.state, .open)
+        XCTAssertTrue(gate.isInHold, "閉じ条件成立後hold期間中はisInHold=trueであるべき")
+    }
+
+    func test_isInHold_falseAfterClosing() {
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 100.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+
+        let silent = TestHelpers.makeSilentBuffer(sampleRate: 24000, frameCount: 1024)
+        for _ in 0..<10 { _ = gate.process(silent, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .closed)
+        XCTAssertFalse(gate.isInHold, "closed後はholdではない")
+    }
+
+    func test_defaultHoldMsZero_behavesLikeOriginalImmediateClose() {
+        // holdMs=0 (デフォルト) では旧動作 (閉じ条件成立で即closing) を維持する
+        let gate = NoiseGate(config: makeHoldConfig(holdMs: 0.0))
+        let loud = TestHelpers.makeSineBuffer(
+            frequency: 440, amplitude: 0.8, sampleRate: 24000, frameCount: 1024
+        )
+        for _ in 0..<10 { _ = gate.process(loud, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .open)
+
+        let silent = TestHelpers.makeSilentBuffer(sampleRate: 24000, frameCount: 1024)
+        for _ in 0..<3 { _ = gate.process(silent, sampleRate: 24000) }
+        XCTAssertEqual(gate.state, .closed, "holdMs=0なら即座に閉じる (releaseMsも極小)")
     }
 }

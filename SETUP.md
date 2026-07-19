@@ -16,8 +16,9 @@
 
 MeetScribe は次の構成で動作する macOS ネイティブアプリです。
 
-- **文字起こし**: OpenAI Realtime API (`gpt-realtime-whisper`) — OpenAI API キーが必要（有料）
-- **整形・翻訳・Copilot パネル**: `gpt-4.1-mini`（同じ OpenAI API キーを使用）— 確定セグメントのフィラー除去・対訳、Catchup 要約、会議全体像の自動更新を行う
+- **OpenAI選択時**: Realtime API (`gpt-realtime-whisper`)で文字起こし、`gpt-4.1-mini`で整形・翻訳・Copilot
+- **xAI選択時**: Grok Speech to Textで文字起こし、`grok-4.3`で整形・翻訳・Copilot
+- OpenAI/xAIのAPIキーは別々にKeychainへ保存でき、GUIで会議に使うプロバイダーを選択する
 - **会議タイトルの自動生成**: Claude Code CLI (`claude -p`) — Claude の Pro / Max サブスクリプション推奨。録音停止時にのみ使用
 - **システム音声の取得**: ScreenCaptureKit（macOS 標準）
 
@@ -28,7 +29,7 @@ MeetScribe は次の構成で動作する macOS ネイティブアプリです�
 
 > **注意（規約）**: 会議タイトル生成機能はユーザー自身の Claude サブスクリプションを
 > Claude Code CLI 経由で使用します。[Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms)
-> を確認の上、自己責任でご利用ください。MeetScribe は Anthropic / OpenAI とは無関係の
+> を確認の上、自己責任でご利用ください。MeetScribe は Anthropic / OpenAI / xAI とは無関係の
 > 非公式プロジェクトです。
 
 ---
@@ -63,9 +64,11 @@ openssl version
 
 ---
 
-## ステップ 1: OpenAI API キーの取得
+## ステップ 1: AI API キーの取得
 
-文字起こしに OpenAI API キーが必須です。以下をユーザーに依頼してください。
+OpenAIまたはxAI、少なくとも選択する側のAPIキーが必要です。両方登録して会議ごとに切り替えることもできます。
+
+### OpenAIを使う場合
 
 1. ブラウザで [platform.openai.com/api-keys](https://platform.openai.com/api-keys) を開く。
 2. OpenAI アカウントでログイン（なければ新規登録）。
@@ -78,6 +81,14 @@ openssl version
 > コスト目安: 文字起こし単体で会議 1 時間あたり約 $0.7（マイク + システム音の 2 ストリーム並列）。
 > これに加え、整形・翻訳と Copilot パネルの利用分だけ `gpt-4.1-mini` の追加費用
 > （$0.40/M 入力・$1.60/M 出力）が発生する。
+
+### xAIを使う場合
+
+1. [xAI Console](https://console.x.ai/)を開き、APIキーを作成する。
+2. 請求設定を有効にし、Grok Speech to Textと`grok-4.3`を利用できることを確認する。
+
+> xAI Streaming STTは音声1時間あたり$0.20。マイクとシステム音声を30分ずつ送る場合、
+> 文字起こし費は最大約$0.20です。整形・翻訳・Copilotのトークン料金は別途発生します。
 
 取得したキーは後のステップ 5 でアプリに設定します。AI はキーの値をログや
 ファイルに書き出さないでください（Keychain にのみ保存します）。
@@ -140,10 +151,10 @@ open "/Applications/MeetScribe.app"
 
 セットアップ画面で以下を設定します（すべて完了すると画面は自動で折り畳まれます）。
 
-1. **OpenAI API Key** — ステップ 1 で取得した `sk-proj-...` を入力して「保存」。
-   Keychain に暗号化保存されます。文字起こしと Copilot パネル（整形/対訳・Catchup 要約・
-   全体像自動更新）の両方がこのキーを使います。
-2. **議事録の保存先（必須）** — 「選択」で録音停止時に議事録 Markdown を書き出す
+1. **AIプロバイダー** — OpenAIまたはxAIを選択。
+2. **API Key** — 選択した側のキーを入力して「保存」。Keychainへプロバイダー別に保存され、
+   文字起こしとCopilotパネル（整形/対訳・Catchup要約・全体像自動更新）が同じ側のキーを使います。
+3. **議事録の保存先（必須）** — 「選択」で録音停止時に議事録 Markdown を書き出す
    フォルダを指定。**未設定だと録音を開始できません**。
 
 ---
