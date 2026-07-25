@@ -33,19 +33,19 @@ struct APIKeyEditorView: View {
                     }
                 }
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 10))
+                .font(.scaled(10))
                 .frame(width: fieldWidth)
 
                 Button(action: { isRevealed.toggle() }) {
                     Image(systemName: isRevealed ? "eye.slash.fill" : "eye.fill")
-                        .font(.system(size: 10))
+                        .font(.scaled(10))
                 }
                 .buttonStyle(.borderless)
                 .help(isRevealed ? "APIキーを隠す" : "APIキーを表示")
 
                 Button("保存") { save() }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                     .disabled(trimmedInput.isEmpty)
 
                 if let onCancel {
@@ -54,13 +54,13 @@ struct APIKeyEditorView: View {
                         onCancel()
                     }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                 }
             }
             Text(state.hasAPIKey(for: provider)
                  ? "Keychain に安全に保存されます。保存すると既存のキーを上書きし、次回の録音開始から適用されます。"
                  : "Keychain に安全に保存されます。")
-                .font(.system(size: 9))
+                .font(.scaled(9))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

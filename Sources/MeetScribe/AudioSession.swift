@@ -77,6 +77,9 @@ final class AudioSession {
     private var micReconnectTask: Task<Void, Never>?
     private var sysReconnectTask: Task<Void, Never>?
 
+    /// SCStream 復帰中の Task。多重復帰を防ぐため 1 本だけ保持。
+    private var sysCaptureRestartTask: Task<Void, Never>?
+
     /// 現セッションの文字起こし言語。start() 時の設定値を固定し、録音中に
     /// 設定を変えても再接続ストリームだけ言語が変わる不整合を防ぐ
     /// (UI の「次回の録音開始から適用」との一貫性)。
@@ -165,21 +168,24 @@ final class AudioSession {
         wireUnexpectedClose(client: micClient, speaker: .me)
         wireUnexpectedClose(client: sysClient, speaker: .other)
 
-        // SCStream が OS 都合で停止したら (画面ロック・権限失効等)、録音全体を
-        // 安全に終了して議事録を保存する (無音タイムアウトと同じ扱い)。
+        // SCStream が OS 都合で停止したら (画面ロック・ディスプレイ構成変化・
+        // 画面収録権限の再確認等)、まず自動復帰を試みる。会議続行中に即保存終了
+        // すると議事録が分断されるため (2026-07-22 リクルート面談で実害)。
+        // 復帰しきれなかった時だけ従来どおり stop() 経路で保存終了する。
         // delegate が captureStatus を直接 .error にすると停止ボタンも Kill も
         // 消えてマイクだけ回り続ける詰みになるため、必ず stop() 経路に流す。
         systemAudio.onUnexpectedStop = { [weak self] reason in
             Task { @MainActor [weak self] in
                 guard let self, AppState.shared.isRunning else { return }
-                AppState.shared.lastError =
-                    "システム音声が停止しました (\(reason))。録音を終了して議事録を保存します。"
-                await self.stop()
+                self.startSystemAudioRestart(reason: reason)
             }
         }
 
         do {
             try microphone.start { [micPipeline, preProcessor = micPreProcessor] buffer, _ in
+                // ミュート中 (Scribe に聴かせないボタン) はフレームを破棄。
+                // キャプチャと VU メーターは生かしたまま送信だけ止める。
+                guard !StreamMuteState.shared.isMuted(.me) else { return }
                 // ノイズゲート/スペクトル解析を通過したフレームだけ送信パイプラインへ渡す。
                 // VU メーター用レベルは MicrophoneCapture 側で既に生バッファから計測済みなので、
                 // ここでのゲーティングは表示には影響しない。
@@ -195,11 +201,7 @@ final class AudioSession {
         }
 
         do {
-            try await systemAudio.start { [sysPipeline, preProcessor = sysPreProcessor] sampleBuffer in
-                preProcessor.processAndForward(sampleBuffer) { gated in
-                    sysPipeline.process(.sample(gated))
-                }
-            }
+            try await systemAudio.start(onBuffer: makeSystemAudioHandler(pipeline: sysPipeline))
         } catch {
             AppState.shared.lastError = "システム音起動失敗: \(error.localizedDescription)"
             AppState.shared.captureStatus = .error(error.localizedDescription)
@@ -373,8 +375,10 @@ final class AudioSession {
         systemAudio.onUnexpectedStop = nil
         micReconnectTask?.cancel()
         sysReconnectTask?.cancel()
+        sysCaptureRestartTask?.cancel()
         micReconnectTask = nil
         sysReconnectTask = nil
+        sysCaptureRestartTask = nil
         micClient?.disconnect()
         sysClient?.disconnect()
         micClient = nil
@@ -385,6 +389,72 @@ final class AudioSession {
         activeProvider = nil
         activeAPIKey = nil
         AppState.shared.reconnectingStreams = []
+        // ミュートを次の会議へ持ち越すと片側が黙って文字起こしされない事故になる
+        AppState.shared.mutedStreams = []
+    }
+
+    /// システム音声キャプチャのバッファハンドラ。start() と SCStream 自動復帰の
+    /// 両方から使うため一本化する (復帰パスだけミュートガードが漏れて、復帰後に
+    /// ミュートが黙って無効化される事故を防ぐ)。
+    private func makeSystemAudioHandler(
+        pipeline: TranscriptionPipeline
+    ) -> SystemAudioCapture.BufferHandler {
+        { [preProcessor = sysPreProcessor] sampleBuffer in
+            // ミュート中 (Scribe に聴かせないボタン) はフレームを破棄。
+            guard !StreamMuteState.shared.isMuted(.other) else { return }
+            preProcessor.processAndForward(sampleBuffer) { gated in
+                pipeline.process(.sample(gated))
+            }
+        }
+    }
+
+    // MARK: - SCStream 自動復帰
+
+    /// SCStream 復帰のリトライ間隔。画面ロック・ディスプレイ切替のような一時的な
+    /// 停止から戻れるよう合計 ~60秒粘る。復帰中もマイク側の録音と文字起こしは継続する。
+    private static let captureRestartBackoffSeconds: [TimeInterval] = [1, 2, 4, 8, 15, 30]
+
+    /// 復帰フローが lastError に書く文言の接頭辞 (成功時に自分のメッセージだけ消すため)。
+    private static let captureRestartErrorPrefix = "[システム音声]"
+
+    private func startSystemAudioRestart(reason: String) {
+        guard sysCaptureRestartTask == nil else { return }
+        sysCaptureRestartTask = Task { [weak self] in
+            await self?.runSystemAudioRestartLoop(reason: reason)
+            // AudioSession は @MainActor なので Task 本体も MainActor 継承。
+            // ループ完了と同じ同期区間で nil に戻し、次回の異常停止に備える。
+            self?.sysCaptureRestartTask = nil
+        }
+    }
+
+    private func runSystemAudioRestartLoop(reason: String) async {
+        DebugLog.log("[MeetScribe] system audio restart start (reason: \(reason))")
+        AppState.shared.lastError =
+            "\(Self.captureRestartErrorPrefix) 停止しました (\(reason))。復帰を試みています…"
+
+        for (attempt, delay) in Self.captureRestartBackoffSeconds.enumerated() {
+            try? await Task.sleep(for: .seconds(delay))
+            // ユーザーが stop/kill を押していたら黙って退く (stop 側が畳み済み)
+            if Task.isCancelled || !AppState.shared.isRunning { return }
+            guard let sysPipeline else { return }
+            do {
+                try await systemAudio.start(onBuffer: makeSystemAudioHandler(pipeline: sysPipeline))
+                DebugLog.log("[MeetScribe] system audio restart succeeded (attempt \(attempt + 1))")
+                if AppState.shared.lastError?.hasPrefix(Self.captureRestartErrorPrefix) == true {
+                    AppState.shared.lastError = nil
+                }
+                return
+            } catch {
+                DebugLog.log("[MeetScribe] system audio restart attempt \(attempt + 1) failed: \(error.localizedDescription)")
+            }
+        }
+
+        // 復帰失敗 → 従来どおり安全に終了して議事録を保存する
+        guard AppState.shared.isRunning else { return }
+        DebugLog.log("[MeetScribe] system audio restart gave up → stop & save")
+        AppState.shared.lastError =
+            "\(Self.captureRestartErrorPrefix) 復帰できませんでした (\(reason))。録音を終了して議事録を保存します。"
+        await stop()
     }
 
     // MARK: - 自動再接続実装
@@ -392,17 +462,17 @@ final class AudioSession {
     /// Client に onUnexpectedClose ハンドラを取り付ける (ロック保護経由)。
     /// `wired` 後に切断検知すると `reconnect(speaker:)` が走る。
     private func wireUnexpectedClose(client: TranscriptionClient, speaker: SpeakerLabel) {
-        client.setOnUnexpectedClose { [weak self] in
+        client.setOnUnexpectedClose { [weak self] quiet in
             // コールバックは MainActor 外スレッドから呼ばれる可能性があるので跳ばす。
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                self.startReconnect(speaker: speaker)
+                self.startReconnect(speaker: speaker, quiet: quiet)
             }
         }
     }
 
     /// 指定ストリームの再接続 Task を起動 (既に走っているなら何もしない)。
-    private func startReconnect(speaker: SpeakerLabel) {
+    private func startReconnect(speaker: SpeakerLabel, quiet: Bool) {
         // 録音中でなければ再接続しない (stop / kill 後の遅延発火対策)
         guard AppState.shared.isRunning else { return }
 
@@ -410,13 +480,13 @@ final class AudioSession {
         case .me:
             guard micReconnectTask == nil else { return }
             micReconnectTask = Task { [weak self] in
-                await self?.runReconnectLoop(speaker: .me)
+                await self?.runReconnectLoop(speaker: .me, quiet: quiet)
                 await MainActor.run { self?.micReconnectTask = nil }
             }
         case .other:
             guard sysReconnectTask == nil else { return }
             sysReconnectTask = Task { [weak self] in
-                await self?.runReconnectLoop(speaker: .other)
+                await self?.runReconnectLoop(speaker: .other, quiet: quiet)
                 await MainActor.run { self?.sysReconnectTask = nil }
             }
         default:
@@ -426,10 +496,14 @@ final class AudioSession {
 
     /// 指数バックオフで再接続を試みる。成功したら pipeline.client を差し替え、
     /// 失敗継続したらユーザーに通知して諦める。
-    private func runReconnectLoop(speaker: SpeakerLabel) async {
+    /// `quiet` は正常系の切断 (xAI 無音タイムアウト等) 起因の再接続で、途中経過の
+    /// バナーを出さない。ただし諦めた時 (ストリーム死亡) だけは quiet でも表示する。
+    private func runReconnectLoop(speaker: SpeakerLabel, quiet: Bool) async {
         AppState.shared.reconnectingStreams.insert(speaker)
-        setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 接続切れ、再接続中…")
-        DebugLog.log("[MeetScribe] reconnect start for \(speaker.rawValue)")
+        if !quiet {
+            setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 接続切れ、再接続中…")
+        }
+        DebugLog.log("[MeetScribe] reconnect start for \(speaker.rawValue) (quiet=\(quiet))")
 
         guard let provider = activeProvider,
               let apiKey = activeAPIKey,
@@ -478,13 +552,15 @@ final class AudioSession {
                     return
                 }
                 AppState.shared.reconnectingStreams.remove(speaker)
-                clearReconnectErrorIfMine()
+                clearReconnectErrorIfMine(speaker: speaker)
                 DebugLog.log("[MeetScribe] reconnect succeeded for \(speaker.rawValue) (attempt \(attempt + 1))")
                 return
             } catch {
                 DebugLog.log("[MeetScribe] reconnect attempt \(attempt + 1) failed for \(speaker.rawValue): \(error.localizedDescription)")
                 newClient.disconnect()
-                setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続失敗 (\(attempt + 1)/\(Self.maxReconnectAttempts)): \(error.localizedDescription)")
+                if !quiet {
+                    setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続失敗 (\(attempt + 1)/\(Self.maxReconnectAttempts)): \(error.localizedDescription)")
+                }
             }
         }
 
@@ -499,10 +575,19 @@ final class AudioSession {
         AppState.shared.lastError = message
     }
 
-    /// 再接続成功時の lastError クリア。自分が立てた `[再接続]` 接頭辞のメッセージのみ消す。
-    /// 他種のエラー (文字起こし失敗、API エラー等) は維持する。
-    private func clearReconnectErrorIfMine() {
-        if AppState.shared.lastError?.hasPrefix(Self.reconnectErrorPrefix) == true {
+    /// 再接続成功時の lastError クリア。自分が立てた `[再接続]` 接頭辞のメッセージに加え、
+    /// speaker 指定時は該当ストリームの通信系エラー (受信エラー / APIエラー) も消す
+    /// — 再接続に成功した時点でそれらは解消済みであり、残すと赤字が出続ける。
+    /// 他ストリームや他種のエラーは維持する。
+    private func clearReconnectErrorIfMine(speaker: SpeakerLabel? = nil) {
+        guard let lastError = AppState.shared.lastError else { return }
+        if lastError.hasPrefix(Self.reconnectErrorPrefix) {
+            AppState.shared.lastError = nil
+            return
+        }
+        if let speaker,
+           lastError.hasPrefix("[\(speaker.displayName)] 受信エラー:")
+            || lastError.hasPrefix("[\(speaker.displayName)] APIエラー:") {
             AppState.shared.lastError = nil
         }
     }

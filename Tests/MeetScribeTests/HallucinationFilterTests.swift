@@ -110,4 +110,43 @@ final class HallucinationFilterTests: XCTestCase {
         XCTAssertFalse(HallucinationFilter.shouldFilter("123"))
         XCTAssertFalse(HallucinationFilter.shouldFilter("2024年"))
     }
+
+    // MARK: - Repetition hallucination (実議事録で観測されたパターン)
+
+    func test_shouldFilter_repeatedAizuchi_returnsTrue() {
+        XCTAssertTrue(HallucinationFilter.shouldFilter("うんうんうんうんうん"))
+        XCTAssertTrue(HallucinationFilter.shouldFilter("うん、うん、うん、うん、うん、うん"))
+        XCTAssertTrue(HallucinationFilter.shouldFilter("はいはいはいはい"))
+    }
+
+    func test_shouldFilter_repeatedEnglishPhrase_returnsTrue() {
+        let text = String(repeating: "Information Technology, ", count: 12)
+        XCTAssertTrue(HallucinationFilter.shouldFilter(text))
+        // 先頭に周期からずれた断片が付いても検出できる
+        XCTAssertTrue(HallucinationFilter.shouldFilter("Technology, " + text))
+    }
+
+    func test_shouldFilter_repeatedNumberSequence_returnsTrue() {
+        // 2026-07-24 の議事録で観測された数字カウントの周期反復
+        let cycle = "二十十一二十十二二十十三二十十四二十十五二十十六二十十七二十十八二十十九二十二十"
+        XCTAssertTrue(HallucinationFilter.shouldFilter(String(repeating: cycle, count: 8)))
+    }
+
+    func test_shouldFilter_emphasisRepetitionInRealSpeech_returnsFalse() {
+        // 実発話の強調反復: 反復部分が全体の6割未満なら残す
+        XCTAssertFalse(HallucinationFilter.shouldFilter("いやいやいやいや、それは違うでしょ"))
+        XCTAssertFalse(HallucinationFilter.shouldFilter("はいはい、わかりました。では次の議題に進みましょう"))
+    }
+
+    func test_shouldFilter_shortRepetition_returnsFalse() {
+        // 4回未満の反復は自然な発話 (最小長8文字未満も対象外)
+        XCTAssertFalse(HallucinationFilter.shouldFilter("うんうんうん"))
+        XCTAssertFalse(HallucinationFilter.shouldFilter("そうそう、その件です"))
+    }
+
+    func test_isRepetitionHallucination_normalLongSentence_returnsFalse() {
+        XCTAssertFalse(HallucinationFilter.isRepetitionHallucination(
+            "今日の会議では営業リストの作成方針について三つの観点から議論を行いました"
+        ))
+    }
 }

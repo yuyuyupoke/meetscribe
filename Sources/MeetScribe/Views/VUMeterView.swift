@@ -7,8 +7,16 @@ struct VUMeterView: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            verticalBar(level: state.micLevel, color: .blue, hint: "自分(マイク)")
-            verticalBar(level: state.systemLevel, color: .green, hint: "相手(システム音)")
+            verticalBar(
+                level: state.micLevel,
+                color: state.mutedStreams.contains(.me) ? Color.secondary.opacity(0.5) : .blue,
+                hint: state.mutedStreams.contains(.me) ? "自分(マイク) — ミュート中" : "自分(マイク)"
+            )
+            verticalBar(
+                level: state.systemLevel,
+                color: state.mutedStreams.contains(.other) ? Color.secondary.opacity(0.5) : .green,
+                hint: state.mutedStreams.contains(.other) ? "相手(システム音) — ミュート中" : "相手(システム音)"
+            )
         }
     }
 

@@ -103,8 +103,37 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(NSMenuItem(title: "すべてを選択", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
         editItem.submenu = edit
 
+        // 表示メニュー: ⌘+ / ⌘- / ⌘0 で UI 文字スケールを変更 (Mac の標準慣習)。
+        let viewItem = NSMenuItem()
+        main.addItem(viewItem)
+        let view = NSMenu(title: "表示")
+        let zoomInItem = NSMenuItem(title: "拡大", action: #selector(zoomIn), keyEquivalent: "+")
+        zoomInItem.target = self
+        view.addItem(zoomInItem)
+        // US 配列では "+" が Shift+= のため、⌘= 単独でも拡大できる隠しキーを併設する
+        // (Safari 等と同じ挙動)。hidden なアイテムは既定でキー同等マッチングから
+        // 除外されるため、allowsKeyEquivalentWhenHidden で明示的に参加させる。
+        let zoomInAlt = NSMenuItem(title: "拡大", action: #selector(zoomIn), keyEquivalent: "=")
+        zoomInAlt.target = self
+        zoomInAlt.isHidden = true
+        zoomInAlt.allowsKeyEquivalentWhenHidden = true
+        view.addItem(zoomInAlt)
+        let zoomOutItem = NSMenuItem(title: "縮小", action: #selector(zoomOut), keyEquivalent: "-")
+        zoomOutItem.target = self
+        view.addItem(zoomOutItem)
+        let zoomResetItem = NSMenuItem(title: "実際のサイズ", action: #selector(zoomReset), keyEquivalent: "0")
+        zoomResetItem.target = self
+        view.addItem(zoomResetItem)
+        viewItem.submenu = view
+
         NSApp.mainMenu = main
     }
+
+    // MARK: - UI 文字スケール (表示メニュー)
+
+    @objc private func zoomIn() { AppState.shared.zoomIn() }
+    @objc private func zoomOut() { AppState.shared.zoomOut() }
+    @objc private func zoomReset() { AppState.shared.zoomReset() }
 
     // MARK: - メニューバー常駐
 

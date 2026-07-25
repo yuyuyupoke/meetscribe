@@ -80,6 +80,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     private var _wasEverConnected = false
     private var _intentionalDisconnect = false
     private var _unexpectedCloseFired = false
+    /// 自分の都合 (heartbeatタイムアウト / xAI無音タイムアウト / recoverable APIエラー) で
+    /// webSocket を cancel した印。この後 receiveLoop に届く `URLError(.cancelled)` は
+    /// 正常系なので UI にエラーを出さない (`_intentionalDisconnect` は「セッション終了」の
+    /// 意味なので流用しない — 再接続フローは生かす必要がある)。
+    private var _selfInitiatedCancel = false
     private var _heartbeatTask: Task<Void, Never>?
     private var _commitTask: Task<Void, Never>?
     private var _bytesSinceLastCommit = 0
@@ -109,11 +114,13 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     // 予期せぬ切断時に AudioSession へ通知するコールバック。
     // MainActor からの設定、URLSession delegate queue / receive queue からの読み出しが
     // 競合するため stateLock で保護する。外部からは setOnUnexpectedClose 経由で書く。
-    private var _onUnexpectedClose: (@Sendable () -> Void)?
+    private var _onUnexpectedClose: (@Sendable (_ quiet: Bool) -> Void)?
 
     /// 予期せぬ切断時に呼ばれるコールバックを設定する。
     /// `disconnect()` 経由の意図的な切断では発火しない。
-    func setOnUnexpectedClose(_ handler: (@Sendable () -> Void)?) {
+    /// `quiet` は「ユーザーに知らせる価値のない正常系の切断」(xAI の無音タイムアウト等)
+    /// を示し、再接続フロー側で進行バナーの表示を抑制する。
+    func setOnUnexpectedClose(_ handler: (@Sendable (_ quiet: Bool) -> Void)?) {
         stateLock.lock(); defer { stateLock.unlock() }
         _onUnexpectedClose = handler
     }
@@ -263,8 +270,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 if !success {
                     DebugLog.log("[\(speaker.rawValue)] heartbeat timeout → triggering reconnect")
                     self.setConnected(false)
-                    self.webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                    // fire を cancel より先に呼ぶ: cancel 由来の receive 失敗が
+                    // 先に fireUnexpectedCloseIfNeeded(quiet:false) を奪うレースを防ぐ
+                    self.markSelfInitiatedCancel()
                     self.fireUnexpectedCloseIfNeeded()
+                    self.webSocket?.cancel(with: .abnormalClosure, reason: nil)
                     return
                 }
             }
@@ -296,6 +306,13 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         }
     }
 
+    /// 自己都合の webSocket cancel を記録する。以降 receiveLoop に届くキャンセル
+    /// エラーは UI に出さない。必ず `webSocket?.cancel()` より前に呼ぶこと。
+    private func markSelfInitiatedCancel() {
+        stateLock.lock(); defer { stateLock.unlock() }
+        _selfInitiatedCancel = true
+    }
+
     /// 予期せぬ切断 (受信エラー / WebSocket close) が発生したかを判定して
     /// onUnexpectedClose を呼ぶ。一度だけ呼ばれることを保証する。
     /// 専用フラグ `_unexpectedCloseFired` を使い、`_intentionalDisconnect` を
@@ -304,7 +321,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     /// 設計判断: 意図的切断時は callback を発火しないが、再利用シナリオが無いため
     /// このメソッドではコールバックを取り出さず、guard 前に早期 return する。
     /// (callback の生死は `disconnect()` が責任を持って nil 化する)
-    private func fireUnexpectedCloseIfNeeded() {
+    private func fireUnexpectedCloseIfNeeded(quiet: Bool = false) {
         stateLock.lock()
         let intentional = _intentionalDisconnect
         let wasConnected = _wasEverConnected
@@ -321,7 +338,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         _onUnexpectedClose = nil
         stateLock.unlock()
 
-        callback?()
+        callback?(quiet)
     }
 
     // MARK: - 状態ヘルパー (ロック保護)
@@ -586,15 +603,23 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 // (再接続成功後のエラークリアより遅れて届き、赤字が残り続ける原因だった)。
                 self.stateLock.lock()
                 let intentional = self._intentionalDisconnect
+                let selfInitiated = self._selfInitiatedCancel
                 self.stateLock.unlock()
                 if intentional { return }
-                // UI 表示用に人間に分かるメッセージへ変換
-                let speaker = self.speaker
-                let humanMsg = ErrorMessageHumanizer.humanize(error)
-                Task { @MainActor in
-                    AppState.shared.lastError = "[\(speaker.displayName)] 受信エラー: \(humanMsg)"
+                // 自己都合の cancel (heartbeat / xAI無音タイムアウト / recoverable
+                // APIエラー) 由来の「キャンセルしました」も正常系。再接続フローは
+                // 各発生源が fireUnexpectedCloseIfNeeded 済みなので、ここでは
+                // UI にエラーを出さずログだけで抜ける。
+                if !selfInitiated {
+                    // UI 表示用に人間に分かるメッセージへ変換
+                    let speaker = self.speaker
+                    let humanMsg = ErrorMessageHumanizer.humanize(error)
+                    Task { @MainActor in
+                        AppState.shared.lastError = "[\(speaker.displayName)] 受信エラー: \(humanMsg)"
+                    }
                 }
                 // 自動再接続にハンドオフ。AudioSession 側で UI 表示+再試行する。
+                // (自己都合 cancel 時は既発火ガードにより no-op)
                 self.fireUnexpectedCloseIfNeeded()
             }
         }
@@ -732,6 +757,22 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 DebugLog.log("[\(speaker.rawValue)] benign: commit on empty buffer (skipped)")
                 break
             }
+            // xAI は無音が続く (実測5分) と ASR 側を止めて type="error"
+            // msg="ASR stream timed out" を送ってくる。相手側ストリームが長時間
+            // 無音なだけの正常系 (対面会議でシステム音ゼロ等) なので、赤字は出さず
+            // 静かに切断→再接続してストリームを生かし直す。放置すると WebSocket は
+            // 開いたままでも ASR が死んでいて、以降の発話が文字起こしされない。
+            if provider == .xAI, errMsg.lowercased().contains("timed out") {
+                DebugLog.log("[\(speaker.rawValue)] benign: xAI idle timeout → silent reconnect")
+                resumeConnectionContinuation(with: .failure(TranscriptionClientError.apiError(type: errType, code: errCode, message: errMsg)))
+                setConnected(false)
+                // fire を cancel より先に呼ぶ: cancel 由来の receive 失敗が先に
+                // quiet=false で fire を奪い「再接続中…」バナーが出るレースを防ぐ
+                markSelfInitiatedCancel()
+                fireUnexpectedCloseIfNeeded(quiet: true)
+                webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                break
+            }
             let recoverable = ErrorMessageHumanizer.isRecoverableAPIErrorType(errType)
             DebugLog.log("[\(speaker.rawValue)] API error type=\(errType ?? "?") recoverable=\(recoverable) msg=\(errMsg)")
             let humanMsg = ErrorMessageHumanizer.humanizeAPIError(type: errType, code: errCode, message: errMsg)
@@ -741,10 +782,13 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 AppState.shared.lastError = "[\(speaker.displayName)] APIエラー: \(humanMsg)"
             }
             if recoverable {
-                // セッション復旧見込みあり → 切断して再接続フローに乗せる
+                // セッション復旧見込みあり → 切断して再接続フローに乗せる。
+                // markSelfInitiatedCancel により、cancel 由来の誤解を招く
+                // 「受信エラー: 通信がキャンセルされました」が表示されるのを防ぐ。
                 setConnected(false)
-                webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                markSelfInitiatedCancel()
                 fireUnexpectedCloseIfNeeded()
+                webSocket?.cancel(with: .abnormalClosure, reason: nil)
             }
 
         default:

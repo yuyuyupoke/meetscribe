@@ -15,12 +15,12 @@ struct SetupSectionView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("⚙️ 初回セットアップ")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.scaled(11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: refreshChecks) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
+                        .font(.scaled(10))
                 }
                 .buttonStyle(.borderless)
                 .help("権限・CLI の状態を再チェック")
@@ -38,7 +38,6 @@ struct SetupSectionView: View {
             providerRow
             apiKeyRow
             meetingsFolderRow
-            knowledgeFolderRow
             claudeCLIRow
         }
         .padding(.horizontal, 12)
@@ -67,11 +66,11 @@ struct SetupSectionView: View {
                   : "tray.full.fill")
                 .foregroundStyle(state.meetingsSaveDirectoryURL == nil ? Color.orange : Color.green)
             Text("議事録の保存先 (必須)")
-                .font(.system(size: 11))
+                .font(.scaled(11))
             Spacer()
             if let url = state.meetingsSaveDirectoryURL {
                 Text(Self.tildePath(url))
-                    .font(.system(size: 9).monospaced())
+                    .font(.scaled(9).monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -79,11 +78,11 @@ struct SetupSectionView: View {
                     .help(url.path)
                 Button("変更") { selectMeetingsFolder() }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
             } else {
                 Button("選択") { selectMeetingsFolder() }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
             }
         }
         .help("録音停止時に議事録 (Markdown) を書き出すフォルダ。設定するまで録音は開始できません。")
@@ -107,53 +106,6 @@ struct SetupSectionView: View {
         }
     }
 
-    // MARK: - 知識源フォルダ行 (任意)
-
-    @ViewBuilder
-    private var knowledgeFolderRow: some View {
-        HStack {
-            Image(systemName: state.knowledgeFolderURL == nil ? "folder.badge.questionmark" : "folder.fill")
-                .foregroundStyle(state.knowledgeFolderURL == nil ? Color.gray : Color.blue)
-            Text("知識源フォルダ (任意)")
-                .font(.system(size: 11))
-            Spacer()
-            if let url = state.knowledgeFolderURL {
-                Text(Self.tildePath(url))
-                    .font(.system(size: 9).monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 220, alignment: .trailing)
-                    .help(url.path)
-                Button("変更") { selectKnowledgeFolder() }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10))
-                Button("解除") {
-                    state.knowledgeFolderURL = nil
-                }
-                .buttonStyle(.borderless)
-                .font(.system(size: 10))
-            } else {
-                Button("選択") { selectKnowledgeFolder() }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 10))
-            }
-        }
-        .help("会議中の Q&A で Claude が参照する知識源フォルダ (md/txt 等)。未指定なら Web 情報のみで回答する。")
-    }
-
-    private func selectKnowledgeFolder() {
-        let panel = NSOpenPanel()
-        panel.title = "知識源フォルダを選択"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
-            state.knowledgeFolderURL = url
-        }
-    }
-
     // MARK: - 権限行
 
     private func permissionRow(
@@ -165,12 +117,12 @@ struct SetupSectionView: View {
             Image(systemName: iconName(for: current))
                 .foregroundStyle(color(for: current))
             Text(label)
-                .font(.system(size: 11))
+                .font(.scaled(11))
             Spacer()
             if current != .granted {
                 Button("許可する", action: action)
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
             }
         }
     }
@@ -198,7 +150,7 @@ struct SetupSectionView: View {
             Image(systemName: "network")
                 .foregroundStyle(.blue)
             Text("AIプロバイダー")
-                .font(.system(size: 11))
+                .font(.scaled(11))
             Spacer()
             Picker("", selection: Binding(
                 get: { state.selectedProvider },
@@ -225,11 +177,11 @@ struct SetupSectionView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                 Text("\(state.selectedProvider.shortDisplayName) API Key (必須)")
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                 Spacer()
                 Button("変更") { isEditingAPIKey = true }
                     .buttonStyle(.borderless)
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
             }
         } else {
             VStack(alignment: .leading, spacing: 4) {
@@ -239,7 +191,7 @@ struct SetupSectionView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                     Text("\(state.selectedProvider.shortDisplayName) API Key (必須)")
-                        .font(.system(size: 11))
+                        .font(.scaled(11))
                     Spacer()
                 }
                 APIKeyEditorView(
@@ -269,14 +221,14 @@ struct SetupSectionView: View {
                 ProgressView().controlSize(.mini)
             }
             Text("Claude CLI (タイトル生成用・任意)")
-                .font(.system(size: 11))
+                .font(.scaled(11))
             Spacer()
             if claudeCLIInstalled == false {
                 Button("入手方法") {
                     NSWorkspace.shared.open(URL(string: "https://code.claude.com/docs/ja/setup")!)
                 }
                 .buttonStyle(.borderless)
-                .font(.system(size: 10))
+                .font(.scaled(10))
             }
         }
         .help(claudeCLIInstalled == false

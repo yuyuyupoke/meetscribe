@@ -17,14 +17,15 @@ struct TranscriptListView: View {
             } else {
                 TranscriptTextView(
                     entries: transcripts.meetingEntries,
-                    showTranslations: state.showTranslations
+                    showTranslations: state.showTranslations,
+                    uiScale: state.uiScale
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if let error = state.lastError {
                 HStack(alignment: .top, spacing: 6) {
                     Text(error)
-                        .font(.system(size: 10))
+                        .font(.scaled(10))
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -33,7 +34,7 @@ struct TranscriptListView: View {
                     if state.reconnectingStreams.isEmpty {
                         Button(action: { state.lastError = nil }) {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
+                                .font(.scaled(11))
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
@@ -51,7 +52,7 @@ struct TranscriptListView: View {
 
     private var placeholder: some View {
         Text("🎧 録音開始すると文字起こしがここに流れる")
-            .font(.system(size: 11))
+            .font(.scaled(11))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -64,9 +65,9 @@ struct TranscriptListView: View {
                 .foregroundStyle(.green)
             VStack(alignment: .leading, spacing: 1) {
                 Text("議事録を保存しました")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.scaled(10, weight: .semibold))
                 Text(url.lastPathComponent)
-                    .font(.system(size: 9).monospaced())
+                    .font(.scaled(9).monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -74,7 +75,7 @@ struct TranscriptListView: View {
             Spacer()
             Button(action: { NSWorkspace.shared.activateFileViewerSelecting([url]) }) {
                 Image(systemName: "folder.fill")
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
             }
             .buttonStyle(.plain)
             .help("Finderで開く")

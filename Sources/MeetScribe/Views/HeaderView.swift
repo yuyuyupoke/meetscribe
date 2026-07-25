@@ -12,6 +12,16 @@ struct HeaderView: View {
             // 左側はドラッグ用の空白
             Spacer()
             aiSettingsButton
+            muteButton(
+                speaker: .me,
+                activeIcon: "mic.fill",
+                mutedIcon: "mic.slash.fill"
+            )
+            muteButton(
+                speaker: .other,
+                activeIcon: "speaker.wave.2.fill",
+                mutedIcon: "speaker.slash.fill"
+            )
             VUMeterView(state: state)
             reconnectBadge
             costLabel
@@ -26,7 +36,7 @@ struct HeaderView: View {
     /// 「課金状況が見えてる」感覚を持てるようにする。
     private var costLabel: some View {
         Text(String(format: "$%.4f", state.totalCostUSD))
-            .font(.system(size: 10, weight: .regular).monospacedDigit())
+            .font(.scaled(10, weight: .regular).monospacedDigit())
             .foregroundStyle(state.totalCostUSD > 0 ? .secondary : Color.secondary.opacity(0.5))
             .help("このセッションでのAI API累計課金（会議開始時にリセット）")
     }
@@ -37,11 +47,11 @@ struct HeaderView: View {
         Button(action: { showAISettings.toggle() }) {
             HStack(spacing: 4) {
                 Image(systemName: "network")
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                 Text("AI: \(state.selectedProvider.shortDisplayName)")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.scaled(10, weight: .medium))
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .semibold))
+                    .font(.scaled(7, weight: .semibold))
             }
             .foregroundStyle(state.hasAPIKey ? Color.primary : Color.orange)
         }
@@ -58,11 +68,11 @@ struct HeaderView: View {
     private var aiSettingsPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("AI設定")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("会議に使うプロバイダー")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.scaled(10, weight: .medium))
                 HStack(spacing: 6) {
                     ForEach(AIProvider.allCases) { provider in
                         providerSelectionButton(provider)
@@ -72,14 +82,14 @@ struct HeaderView: View {
                 Text(state.canChangeProvider
                      ? "変更は次回の会議開始から適用されます。"
                      : "現在の会議には影響せず、変更は次回の会議から適用されます。")
-                    .font(.system(size: 9))
+                    .font(.scaled(9))
                     .foregroundStyle(.secondary)
             }
 
             Divider()
 
             Text("API Keys")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.scaled(11, weight: .semibold))
             ForEach(AIProvider.allCases) { provider in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -87,10 +97,10 @@ struct HeaderView: View {
                               ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(state.hasAPIKey(for: provider) ? Color.green : .secondary)
                         Text(provider.displayName)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.scaled(10, weight: .medium))
                         Spacer()
                         Text(state.hasAPIKey(for: provider) ? "設定済み" : "未設定")
-                            .font(.system(size: 9))
+                            .font(.scaled(9))
                             .foregroundStyle(.secondary)
                     }
                     APIKeyEditorView(
@@ -114,7 +124,7 @@ struct HeaderView: View {
             HStack(spacing: 5) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 Text(provider.displayName)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.scaled(10, weight: .medium))
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
@@ -133,6 +143,30 @@ struct HeaderView: View {
         .help("次回の会議で\(provider.displayName)を使用")
     }
 
+    /// ストリーム別ミュート (Scribe に聴かせない)。ハイブリッド会議で部屋の発話が
+    /// マイクと Zoom 経由の両方から二重に文字起こしされるとき、片側を止める用途。
+    /// 録音中でなくても切り替え可能 (録音開始直後から効く)。録音終了時に自動解除。
+    private func muteButton(
+        speaker: SpeakerLabel,
+        activeIcon: String,
+        mutedIcon: String
+    ) -> some View {
+        let isMuted = state.mutedStreams.contains(speaker)
+        return Button(action: { state.toggleMute(speaker) }) {
+            Image(systemName: isMuted ? mutedIcon : activeIcon)
+                .foregroundStyle(isMuted ? Color.orange : Color.secondary)
+                .font(.scaled(12))
+                .frame(width: 16)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("mute-\(speaker.rawValue)")
+        .accessibilityLabel("\(speaker.displayName)の音声を文字起こしから除外")
+        .accessibilityValue(isMuted ? "muted" : "active")
+        .help(isMuted
+              ? "[\(speaker.displayName)] ミュート中: この音は文字起こしされません（クリックで再開）"
+              : "[\(speaker.displayName)] の音を文字起こしから除外する（対面+オンライン同時参加で二重記録される時に）")
+    }
+
     /// 再接続中のストリームを🔄バッジで表示。Realtime API の ~30-60分セッション上限で
     /// WebSocket が切れたとき、AudioSession が自動再接続している間表示される。
     @ViewBuilder
@@ -141,7 +175,7 @@ struct HeaderView: View {
             HStack(spacing: 3) {
                 ProgressView().controlSize(.mini)
                 Text("再接続中")
-                    .font(.system(size: 9))
+                    .font(.scaled(9))
                     .foregroundStyle(.orange)
             }
             .help(Self.reconnectTooltip(streams: state.reconnectingStreams))
@@ -160,7 +194,7 @@ struct HeaderView: View {
             HStack(spacing: 4) {
                 ProgressView().controlSize(.small)
                 Text("保存中…")
-                    .font(.system(size: 9))
+                    .font(.scaled(9))
                     .foregroundStyle(.secondary)
             }
         } else {
@@ -169,7 +203,7 @@ struct HeaderView: View {
                 Button(action: { Task { await AudioSession.shared.start() } }) {
                     Image(systemName: "record.circle")
                         .foregroundStyle(state.canStart ? .red : .gray)
-                        .font(.system(size: 16))
+                        .font(.scaled(16))
                 }
                 .buttonStyle(.plain)
                 .disabled(!state.canStart)
@@ -180,7 +214,7 @@ struct HeaderView: View {
                 Button(action: { Task { await AudioSession.shared.stop() } }) {
                     Image(systemName: "stop.fill")
                         .foregroundStyle(.red)
-                        .font(.system(size: 16))
+                        .font(.scaled(16))
                 }
                 .buttonStyle(.plain)
                 .help("録音停止 & 議事録保存")
@@ -192,7 +226,7 @@ struct HeaderView: View {
         Button(action: { Task { await AudioSession.shared.kill() } }) {
             Image(systemName: "xmark.octagon.fill")
                 .foregroundStyle(.red.opacity(state.isRunning ? 1.0 : 0.3))
-                .font(.system(size: 16))
+                .font(.scaled(16))
         }
         .buttonStyle(.plain)
         .disabled(!state.isRunning)

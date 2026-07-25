@@ -37,6 +37,21 @@ enum HallucinationFilter {
         pattern: #"^[\s。、．，！？!?,.\-…・　]+$"#
     )
 
+    /// 同一フレーズ (1〜50文字) が4回以上連続するパターン。
+    /// Whisper系は無音・低SNR区間で「十十一二十十二…」「Information Technology,
+    /// Information Technology, …」のような周期反復を生成する。
+    private static let repetitionPattern = try! NSRegularExpression(
+        pattern: #"(.{1,50}?)\1{3,}"#,
+        options: [.dotMatchesLineSeparators]
+    )
+
+    /// 反復部分がテキスト全体に占める割合の下限。実発話に混ざる強調反復
+    /// (「いやいやいやいや、それは違う」等) を誤って落とさないための境界。
+    private static let repetitionCoverageThreshold = 0.6
+
+    /// 反復判定を行う最小テキスト長 (UTF-16単位)。2文字フレーズ×4回=8文字から。
+    private static let repetitionMinLength = 8
+
     /// テキストがハルシネーション定型文に該当するか判定する。
     ///
     /// - Parameter text: completedイベントの文字起こしテキスト
@@ -51,6 +66,24 @@ enum HallucinationFilter {
             return true
         }
 
-        return knownPatterns.contains(trimmed)
+        if knownPatterns.contains(trimmed) { return true }
+
+        return isRepetitionHallucination(trimmed)
+    }
+
+    /// フレーズ反復ハルシネーションかを判定する。
+    /// 空白ゆらぎで周期がずれないよう空白を除去してから、反復マッチの合計長が
+    /// 全体の `repetitionCoverageThreshold` 以上を占める場合にハルシネーションとみなす。
+    static func isRepetitionHallucination(_ text: String) -> Bool {
+        let normalized = String(text.filter { !$0.isWhitespace })
+        let ns = normalized as NSString
+        guard ns.length >= repetitionMinLength else { return false }
+
+        let range = NSRange(location: 0, length: ns.length)
+        let matches = repetitionPattern.matches(in: normalized, range: range)
+        guard !matches.isEmpty else { return false }
+
+        let repeatedLength = matches.reduce(0) { $0 + $1.range.length }
+        return Double(repeatedLength) >= Double(ns.length) * repetitionCoverageThreshold
     }
 }

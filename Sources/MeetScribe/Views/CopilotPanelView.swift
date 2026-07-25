@@ -31,9 +31,9 @@ struct CopilotPanelView: View {
             meetscribeIcon
             VStack(alignment: .leading, spacing: 1) {
                 Text("Scribe")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.scaled(12, weight: .semibold))
                 Text(statusText)
-                    .font(.system(size: 9))
+                    .font(.scaled(9))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -53,7 +53,7 @@ struct CopilotPanelView: View {
     private var supportButton: some View {
         Button(action: openSupportLink) {
             Image(systemName: "cup.and.saucer.fill")
-                .font(.system(size: 11))
+                .font(.scaled(11))
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
@@ -92,10 +92,10 @@ struct CopilotPanelView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Image(systemName: "map.fill")
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                     .foregroundStyle(.blue)
                 Text("全体像")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.scaled(10, weight: .semibold))
                     .foregroundStyle(.secondary)
                 if state.isOverviewUpdating {
                     ProgressView().controlSize(.mini)
@@ -114,7 +114,7 @@ struct CopilotPanelView: View {
                 Text(state.isRunning
                      ? "👂 傍聴中… 発話が溜まると全体像を表示します"
                      : "録音を開始すると、AIが会議の目的・議題を自動で把握します")
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                     .foregroundStyle(.secondary.opacity(0.8))
             }
         }
@@ -125,11 +125,11 @@ struct CopilotPanelView: View {
     private func overviewRow(label: String, text: String) -> some View {
         HStack(alignment: .top, spacing: 4) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.scaled(9, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, alignment: .leading)
             Text(text)
-                .font(.system(size: 10))
+                .font(.scaled(10))
                 .foregroundStyle(.primary.opacity(0.9))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -158,10 +158,10 @@ struct CopilotPanelView: View {
     private var placeholder: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("⏱ 下のボタンで直近の内容に追いつけます")
-                .font(.system(size: 11))
+                .font(.scaled(11))
                 .foregroundStyle(.secondary)
             Text("離席から戻った時・聞き逃した時に、その間の要約を数秒で表示します")
-                .font(.system(size: 9))
+                .font(.scaled(9))
                 .foregroundStyle(.secondary.opacity(0.7))
         }
         .padding(.top, 4)
@@ -171,15 +171,15 @@ struct CopilotPanelView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Image(systemName: card.isError ? "exclamationmark.triangle.fill" : "clock.arrow.circlepath")
-                    .font(.system(size: 9))
+                    .font(.scaled(9))
                     .foregroundStyle(card.isError ? .red : .orange)
                 Text("\(card.periodLabel)（\(card.minutes)分）")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.scaled(9, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
             }
             Text(card.text)
-                .font(.system(size: 11))
+                .font(.scaled(11))
                 .foregroundStyle(card.isError ? Color.red.opacity(0.9) : .primary.opacity(0.95))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -197,7 +197,7 @@ struct CopilotPanelView: View {
     private var catchupButtonBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 11))
+                .font(.scaled(11))
                 .foregroundStyle(state.isRunning ? .orange : .secondary.opacity(0.5))
                 .help("Catchup: 直近N分の要約")
             ForEach(Self.catchupMinutes, id: \.self) { minutes in
@@ -218,7 +218,7 @@ struct CopilotPanelView: View {
             CopilotController.shared.requestCatchup(minutes: minutes)
         } label: {
             Text("\(minutes)分")
-                .font(.system(size: 10))
+                .font(.scaled(10))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(

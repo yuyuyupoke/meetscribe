@@ -80,6 +80,27 @@ final class AppState {
         didSet { UserDefaults.standard.set(showTranslations, forKey: Self.translationsKey) }
     }
 
+    // MARK: - UI 文字スケール (⌘+ / ⌘- / ⌘0)
+
+    /// UI 全体の文字スケール (1.0 = 標準)。フォントサイズに乗算して適用する。
+    /// メインメニュー「表示」の 拡大/縮小/実際のサイズ から変更、UserDefaults 永続化。
+    var uiScale: Double = 1.0 {
+        didSet { UserDefaults.standard.set(uiScale, forKey: Self.uiScaleKey) }
+    }
+
+    nonisolated static let uiScaleRange: ClosedRange<Double> = 0.8...1.8
+    nonisolated static let uiScaleStep: Double = 0.1
+
+    func zoomIn() { uiScale = Self.steppedScale(uiScale, by: +Self.uiScaleStep) }
+    func zoomOut() { uiScale = Self.steppedScale(uiScale, by: -Self.uiScaleStep) }
+    func zoomReset() { uiScale = 1.0 }
+
+    /// スケールを1段階増減する (範囲クランプ + 浮動小数点誤差の10分の1丸め)。純関数。
+    nonisolated static func steppedScale(_ current: Double, by delta: Double) -> Double {
+        let next = ((current + delta) * 10).rounded() / 10
+        return min(max(next, uiScaleRange.lowerBound), uiScaleRange.upperBound)
+    }
+
     // MARK: - Copilot (右カラム: Catchup要約 + 全体像)
 
     /// Catchup要約カード (新しい順)。録音開始でクリア。
@@ -98,6 +119,22 @@ final class AppState {
     /// AudioSession.runReconnectLoop が出し入れする。
     var reconnectingStreams: Set<SpeakerLabel> = []
 
+    /// ミュート中 (Scribe に聴かせない) のストリーム集合。UI 表示用。
+    /// 実際のフレーム破棄はオーディオスレッドが StreamMuteState を読んで行うため、
+    /// didSet で同期する。持ち越し事故 (次の会議で片側が文字起こしされない) を
+    /// 防ぐため、録音終了時に AudioSession.tearDown がリセットする。
+    var mutedStreams: Set<SpeakerLabel> = [] {
+        didSet { StreamMuteState.shared.sync(with: mutedStreams) }
+    }
+
+    func toggleMute(_ speaker: SpeakerLabel) {
+        if mutedStreams.contains(speaker) {
+            mutedStreams.remove(speaker)
+        } else {
+            mutedStreams.insert(speaker)
+        }
+    }
+
     // 会議の開始時刻 (nil = 未録音)
     var meetingStartedAt: Date?
 
@@ -114,22 +151,15 @@ final class AppState {
         didSet { Self.persistFolder(meetingsSaveDirectoryURL, key: Self.meetingsKey) }
     }
 
-    // ローカル知識源フォルダ (Q&A 時に Claude が参照、任意)。
-    // UserDefaults キー "knowledgeFolderBookmark" にブックマークデータで永続化。
-    var knowledgeFolderURL: URL? {
-        didSet { Self.persistFolder(knowledgeFolderURL, key: Self.knowledgeKey) }
-    }
-
     private init() {
+        // 撤去済みの知識源フォルダ (旧 claude -p Q&A) のブックマークを掃除
+        UserDefaults.standard.removeObject(forKey: "knowledgeFolderBookmark")
         if let rawProvider = UserDefaults.standard.string(forKey: Self.providerKey),
            let provider = AIProvider(rawValue: rawProvider) {
             self.selectedProvider = provider
         }
         if let url = Self.loadFolder(key: Self.meetingsKey) {
             self.meetingsSaveDirectoryURL = url
-        }
-        if let url = Self.loadFolder(key: Self.knowledgeKey) {
-            self.knowledgeFolderURL = url
         }
         if let lang = UserDefaults.standard.string(forKey: Self.languageKey),
            Self.supportedLanguages.contains(lang) {
@@ -138,18 +168,23 @@ final class AppState {
         if UserDefaults.standard.object(forKey: Self.translationsKey) != nil {
             self.showTranslations = UserDefaults.standard.bool(forKey: Self.translationsKey)
         }
+        let storedScale = UserDefaults.standard.double(forKey: Self.uiScaleKey)
+        if storedScale > 0 {
+            // 破損・旧バージョン値対策で必ず範囲へクランプする
+            self.uiScale = min(max(storedScale, Self.uiScaleRange.lowerBound), Self.uiScaleRange.upperBound)
+        }
     }
 
     // MARK: - フォルダ永続化 (Security-Scoped Bookmark)
 
     private static let meetingsKey = "meetingsSaveDirectoryBookmark"
-    private static let knowledgeKey = "knowledgeFolderBookmark"
     private static let providerKey = "selectedAIProvider"
     private static let languageKey = "transcriptionLanguage"
 
     /// 言語設定の許容値 (UI の Picker と対応)。UserDefaults 破損対策。
     static let supportedLanguages: Set<String> = ["auto", "ja", "en"]
     private static let translationsKey = "showTranslations"
+    private static let uiScaleKey = "uiScale"
 
     private static func persistFolder(_ url: URL?, key: String) {
         let defaults = UserDefaults.standard

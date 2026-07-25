@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// 画面下部に常時表示するフッター。議事録の保存先と知識源フォルダのパスを
-/// 表示し、それぞれ GUI でいつでも変更できる。
+/// 画面下部に常時表示するフッター。議事録の保存先パスを表示し、
+/// GUI でいつでも変更できる。
 struct SettingsFooterView: View {
     @Bindable var state: AppState
 
@@ -24,17 +24,7 @@ struct SettingsFooterView: View {
                 url: state.meetingsSaveDirectoryURL,
                 tint: state.meetingsSaveDirectoryURL == nil ? .orange : .green,
                 onChange: selectMeetingsFolder,
-                onClear: nil,
                 hint: "録音停止時に議事録がここに保存されます。未設定だと録音を開始できません"
-            )
-            Divider().frame(height: 12)
-            folderControl(
-                icon: state.knowledgeFolderURL == nil ? "folder.badge.plus" : "folder.fill",
-                label: "参照",
-                url: state.knowledgeFolderURL,
-                tint: state.knowledgeFolderURL == nil ? Color.gray : .blue,
-                onChange: selectKnowledgeFolder,
-                onClear: { state.knowledgeFolderURL = nil }
             )
             Divider().frame(height: 12)
             languageControl
@@ -53,51 +43,37 @@ struct SettingsFooterView: View {
         url: URL?,
         tint: Color,
         onChange: @escaping () -> Void,
-        onClear: (() -> Void)?,
         hint: String? = nil
     ) -> some View {
-        HStack(spacing: 4) {
-            // アイコン + ラベル + パス全体がクリック可能。押すとフォルダ選択ダイアログ。
-            Button(action: onChange) {
-                HStack(spacing: 4) {
-                    Image(systemName: icon)
-                        .foregroundStyle(tint)
-                        .font(.system(size: 12))
-                    Text("\(label):")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                    if let url {
-                        Text(Self.tildePath(url))
-                            .font(.system(size: 10).monospaced())
-                            .foregroundStyle(.primary.opacity(0.8))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: 200, alignment: .leading)
-                    } else {
-                        Text("未設定")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary.opacity(0.7))
-                    }
+        // アイコン + ラベル + パス全体がクリック可能。押すとフォルダ選択ダイアログ。
+        Button(action: onChange) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .foregroundStyle(tint)
+                    .font(.scaled(12))
+                Text("\(label):")
+                    .font(.scaled(10))
+                    .foregroundStyle(.secondary)
+                if let url {
+                    Text(Self.tildePath(url))
+                        .font(.scaled(10).monospaced())
+                        .foregroundStyle(.primary.opacity(0.8))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 200, alignment: .leading)
+                } else {
+                    Text("未設定")
+                        .font(.scaled(10))
+                        .foregroundStyle(.secondary.opacity(0.7))
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help({
-                let base = url.map { "\(label): \($0.path)（クリックで変更）" } ?? "\(label)フォルダを選択"
-                return hint.map { "\(base)。\($0)" } ?? base
-            }())
-
-            // 解除（任意フォルダのみ）。xmark アイコンで文言なし。
-            if let onClear, url != nil {
-                Button(action: onClear) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("\(label)フォルダを解除")
-            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .help({
+            let base = url.map { "\(label): \($0.path)（クリックで変更）" } ?? "\(label)フォルダを選択"
+            return hint.map { "\(base)。\($0)" } ?? base
+        }())
     }
 
     /// 文字起こし言語の切替。Auto = API側の自動検出 (languageパラメータ省略)。
@@ -106,7 +82,7 @@ struct SettingsFooterView: View {
         HStack(spacing: 4) {
             Image(systemName: "globe")
                 .foregroundStyle(.blue)
-                .font(.system(size: 12))
+                .font(.scaled(12))
             Picker("", selection: $state.transcriptionLanguage) {
                 Text("Auto").tag("auto")
                 Text("🇯🇵").tag("ja")
@@ -125,7 +101,7 @@ struct SettingsFooterView: View {
         HStack(spacing: 4) {
             Image(systemName: "network")
                 .foregroundStyle(.blue)
-                .font(.system(size: 12))
+                .font(.scaled(12))
             Picker("", selection: $state.selectedProvider) {
                 ForEach(AIProvider.allCases) { provider in
                     Text(provider.shortDisplayName).tag(provider)
@@ -146,9 +122,9 @@ struct SettingsFooterView: View {
             HStack(spacing: 4) {
                 Image(systemName: "character.book.closed.fill")
                     .foregroundStyle(state.showTranslations ? Color.blue : .secondary.opacity(0.6))
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                 Text("対訳")
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                     .foregroundStyle(state.showTranslations ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.7))
             }
             .contentShape(Rectangle())
@@ -168,12 +144,12 @@ struct SettingsFooterView: View {
             HStack(spacing: 4) {
                 Image(systemName: "key.fill")
                     .foregroundStyle(state.hasAPIKey ? Color.green : .orange)
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                 Text("APIキー:")
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                     .foregroundStyle(.secondary)
                 Text("\(state.selectedProvider.shortDisplayName) \(state.hasAPIKey ? "設定済み" : "未設定")")
-                    .font(.system(size: 10))
+                    .font(.scaled(10))
                     .foregroundStyle(state.hasAPIKey ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.7))
             }
             .contentShape(Rectangle())
@@ -188,7 +164,7 @@ struct SettingsFooterView: View {
     private var apiKeyEditor: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("API Keys")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.scaled(11, weight: .semibold))
             ForEach(AIProvider.allCases) { provider in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -196,10 +172,10 @@ struct SettingsFooterView: View {
                               ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(state.hasAPIKey(for: provider) ? Color.green : .secondary)
                         Text(provider.displayName)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.scaled(10, weight: .medium))
                         Spacer()
                         Text(state.hasAPIKey(for: provider) ? "設定済み" : "未設定")
-                            .font(.system(size: 9))
+                            .font(.scaled(9))
                             .foregroundStyle(.secondary)
                     }
                     APIKeyEditorView(
@@ -232,15 +208,4 @@ struct SettingsFooterView: View {
         }
     }
 
-    private func selectKnowledgeFolder() {
-        let panel = NSOpenPanel()
-        panel.title = "知識源フォルダを選択"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
-            state.knowledgeFolderURL = url
-        }
-    }
 }

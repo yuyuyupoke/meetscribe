@@ -49,7 +49,8 @@ enum TranscriptCleaner {
             apiKey: apiKey,
             provider: provider,
             timeout: 15,
-            forceJSON: true
+            forceJSON: true,
+            cacheKey: PromptCacheKey.cleanerSingle
         )
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }
@@ -124,7 +125,8 @@ enum TranscriptCleaner {
             apiKey: apiKey,
             provider: provider,
             timeout: 20,
-            forceJSON: true
+            forceJSON: true,
+            cacheKey: PromptCacheKey.cleanerBatch
         )
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }

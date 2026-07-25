@@ -16,6 +16,8 @@ struct TranscriptTextView: NSViewRepresentable {
     let entries: [TranscriptEntry]
     /// 対訳 (日本語訳) を表示するか。フッターのトグルと連動。
     var showTranslations: Bool = true
+    /// UI 文字スケール (⌘+/⌘- と連動)。フォントサイズに乗算する。
+    var uiScale: CGFloat = 1.0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -74,7 +76,10 @@ struct TranscriptTextView: NSViewRepresentable {
 
         // entries は Equatable (struct 全フィールド比較) なので、内容が本当に
         // 変わっていない再描画呼び出しはここで早期リターンする。
-        guard entries != coordinator.lastEntries || showTranslations != coordinator.lastShowTranslations else {
+        let scaleChanged = uiScale != coordinator.lastUIScale
+        guard entries != coordinator.lastEntries
+                || showTranslations != coordinator.lastShowTranslations
+                || scaleChanged else {
             return
         }
 
@@ -89,7 +94,7 @@ struct TranscriptTextView: NSViewRepresentable {
             : Self.topAnchorCharacterIndex(textView: textView, visibleRect: visibleRectBefore)
 
         let edits: [TranscriptTextDiff.TextEdit]
-        if let ops = TranscriptTextDiff.diffOps(
+        if !scaleChanged, let ops = TranscriptTextDiff.diffOps(
             old: coordinator.lastEntries,
             new: entries,
             oldShowTranslations: coordinator.lastShowTranslations,
@@ -101,13 +106,19 @@ struct TranscriptTextView: NSViewRepresentable {
                 new: entries,
                 oldShowTranslations: coordinator.lastShowTranslations,
                 newShowTranslations: showTranslations,
+                uiScale: uiScale,
                 textStorage: textStorage
             )
         } else {
-            // id の並べ替え・重複などの想定外ケースのみ全文再構築にフォールバックする。
-            // (appendDelta/removeItem の実装上、通常運用では発生しない安全網)
+            // スケール変更時 (全エントリのフォント属性が変わるので diff の .keep が使えない)、
+            // および id の並べ替え・重複などの想定外ケースは全文再構築にフォールバックする。
+            // (後者は appendDelta/removeItem の実装上、通常運用では発生しない安全網)
             // この経路では選択範囲・スクロール位置の厳密な保持は保証しない。
-            let attributed = Self.buildAttributed(entries: entries, showTranslations: showTranslations)
+            let attributed = Self.buildAttributed(
+                entries: entries,
+                showTranslations: showTranslations,
+                uiScale: uiScale
+            )
             textStorage.beginEditing()
             textStorage.setAttributedString(attributed)
             textStorage.endEditing()
@@ -116,6 +127,7 @@ struct TranscriptTextView: NSViewRepresentable {
 
         coordinator.lastEntries = entries
         coordinator.lastShowTranslations = showTranslations
+        coordinator.lastUIScale = uiScale
 
         // 自動追従: 末尾近く && 選択範囲なし のときのみ。
         // 選択中に飛ばすとユーザーのコピー操作を破壊する。
@@ -150,6 +162,7 @@ struct TranscriptTextView: NSViewRepresentable {
     final class Coordinator {
         var lastEntries: [TranscriptEntry] = []
         var lastShowTranslations: Bool = true
+        var lastUIScale: CGFloat = 1.0
     }
 
     // MARK: - Diff 適用
@@ -165,6 +178,7 @@ struct TranscriptTextView: NSViewRepresentable {
         new: [TranscriptEntry],
         oldShowTranslations: Bool,
         newShowTranslations: Bool,
+        uiScale: CGFloat = 1.0,
         textStorage: NSTextStorage
     ) -> [TranscriptTextDiff.TextEdit] {
         var edits: [TranscriptTextDiff.TextEdit] = []
@@ -178,7 +192,8 @@ struct TranscriptTextView: NSViewRepresentable {
                 let length = renderChunk(
                     entry: new[newIndex],
                     showTranslations: newShowTranslations,
-                    isLast: newIndex == new.count - 1
+                    isLast: newIndex == new.count - 1,
+                    uiScale: uiScale
                 ).length
                 cursor += length
                 oldCursor += length
@@ -187,12 +202,14 @@ struct TranscriptTextView: NSViewRepresentable {
                 let oldLength = renderChunk(
                     entry: old[oldIndex],
                     showTranslations: oldShowTranslations,
-                    isLast: oldIndex == old.count - 1
+                    isLast: oldIndex == old.count - 1,
+                    uiScale: uiScale
                 ).length
                 let newChunk = renderChunk(
                     entry: new[newIndex],
                     showTranslations: newShowTranslations,
-                    isLast: newIndex == new.count - 1
+                    isLast: newIndex == new.count - 1,
+                    uiScale: uiScale
                 )
                 textStorage.replaceCharacters(in: NSRange(location: cursor, length: oldLength), with: newChunk)
                 edits.append(TranscriptTextDiff.TextEdit(
@@ -206,7 +223,8 @@ struct TranscriptTextView: NSViewRepresentable {
                 let oldLength = renderChunk(
                     entry: old[oldIndex],
                     showTranslations: oldShowTranslations,
-                    isLast: oldIndex == old.count - 1
+                    isLast: oldIndex == old.count - 1,
+                    uiScale: uiScale
                 ).length
                 textStorage.deleteCharacters(in: NSRange(location: cursor, length: oldLength))
                 edits.append(TranscriptTextDiff.TextEdit(
@@ -219,7 +237,8 @@ struct TranscriptTextView: NSViewRepresentable {
                 let newChunk = renderChunk(
                     entry: new[newIndex],
                     showTranslations: newShowTranslations,
-                    isLast: newIndex == new.count - 1
+                    isLast: newIndex == new.count - 1,
+                    uiScale: uiScale
                 )
                 textStorage.replaceCharacters(in: NSRange(location: cursor, length: 0), with: newChunk)
                 edits.append(TranscriptTextDiff.TextEdit(
@@ -292,14 +311,16 @@ struct TranscriptTextView: NSViewRepresentable {
     /// 共有することで見た目の不一致を防ぐ。
     static func buildAttributed(
         entries: [TranscriptEntry],
-        showTranslations: Bool
+        showTranslations: Bool,
+        uiScale: CGFloat = 1.0
     ) -> NSAttributedString {
         let result = NSMutableAttributedString()
         for (i, entry) in entries.enumerated() {
             result.append(renderChunk(
                 entry: entry,
                 showTranslations: showTranslations,
-                isLast: i == entries.count - 1
+                isLast: i == entries.count - 1,
+                uiScale: uiScale
             ))
         }
         return result
@@ -327,7 +348,8 @@ struct TranscriptTextView: NSViewRepresentable {
     static func renderChunk(
         entry: TranscriptEntry,
         showTranslations: Bool,
-        isLast: Bool
+        isLast: Bool,
+        uiScale: CGFloat = 1.0
     ) -> NSAttributedString {
         let translation: String? = {
             guard showTranslations, let t = entry.translation, !t.isEmpty else { return nil }
@@ -337,7 +359,7 @@ struct TranscriptTextView: NSViewRepresentable {
 
         let labelAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(
-                ofSize: Style.labelFontSize,
+                ofSize: Style.labelFontSize * uiScale,
                 weight: .semibold
             ),
             .foregroundColor: speakerColor(for: entry.speaker),
@@ -345,7 +367,7 @@ struct TranscriptTextView: NSViewRepresentable {
         ]
         let bodyAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(
-                ofSize: Style.bodyFontSize,
+                ofSize: Style.bodyFontSize * uiScale,
                 weight: .regular
             ),
             .foregroundColor: NSColor.labelColor
@@ -366,7 +388,7 @@ struct TranscriptTextView: NSViewRepresentable {
         if let translation {
             let translationAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(
-                    ofSize: Style.translationFontSize,
+                    ofSize: Style.translationFontSize * uiScale,
                     weight: .regular
                 ),
                 .foregroundColor: NSColor.secondaryLabelColor,

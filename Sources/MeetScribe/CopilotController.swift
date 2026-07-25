@@ -119,7 +119,8 @@ final class CopilotController {
             user: transcript,
             apiKey: apiKey,
             provider: provider,
-            timeout: 20
+            timeout: 20,
+            cacheKey: PromptCacheKey.catchup
         )
         // セッション終了/再開で cancel された遅延応答は、新セッションの状態
         // (カードリスト・isCatchupRunning) に触らず破棄する。フラグは
@@ -218,7 +219,8 @@ final class CopilotController {
             apiKey: apiKey,
             provider: provider,
             timeout: 20,
-            forceJSON: true
+            forceJSON: true,
+            cacheKey: PromptCacheKey.overview
         )
         if costUSD > 0 { AppState.shared.addCost(costUSD) }
 
