@@ -34,14 +34,32 @@ codesign --verify --deep --strict "$APP_DIR" || {
     exit 1
 }
 
-echo "==> [3/5] DMG 作成 (install.command 同梱)"
+# ad-hoc 署名のまま配布すると、環境によっては「壊れているため開けません」になり
+# ユーザー側に復旧手段がない。build.sh は証明書が無いと黙って ad-hoc に落ちるため、
+# 配布物を作る前にここで止める。
+if codesign -dvv "$APP_DIR" 2>&1 | grep -q "Signature=adhoc"; then
+    echo "ERROR: ad-hoc 署名のままです。./scripts/setup-signing.sh を実行してから再ビルドしてください" >&2
+    exit 1
+fi
+
+# 配布物にデバッガアタッチ許可が残っていないことを確認する
+# (メモリ上の API キーや会議音声を他プロセスから読めてしまう)
+if codesign -d --entitlements - "$APP_DIR" 2>/dev/null | grep -q "get-task-allow"; then
+    echo "ERROR: get-task-allow entitlement が残っています。Resources/MeetScribe.entitlements を確認してください" >&2
+    exit 1
+fi
+
+echo "==> [3/5] DMG 作成 (Applications へドラッグする標準レイアウト)"
+# install.command による xattr 剥がしは廃止した。
+# DMG 経由で配布されるとスクリプト自体も quarantine を継承してブロックされるうえ、
+# macOS 15 以降は Ctrl+クリックでの Gatekeeper 回避も廃止されている。
+# 初回起動の許可手順は README に記載する。
 DMG_PATH="$ARTIFACTS_DIR/MeetScribe-$VERSION.dmg"
 rm -f "$DMG_PATH"
 DMG_STAGING_DIR="$(mktemp -d)"
 trap 'rm -rf "$DMG_STAGING_DIR"' EXIT
 cp -R "$APP_DIR" "$DMG_STAGING_DIR/${APP_NAME}.app"
-cp "$PROJECT_DIR/scripts/install.command" "$DMG_STAGING_DIR/install.command"
-chmod +x "$DMG_STAGING_DIR/install.command"
+ln -s /Applications "$DMG_STAGING_DIR/Applications"
 hdiutil create \
     -volname "$APP_NAME" \
     -srcfolder "$DMG_STAGING_DIR" \

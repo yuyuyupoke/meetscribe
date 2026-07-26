@@ -19,18 +19,13 @@ MeetScribe は次の構成で動作する macOS ネイティブアプリです�
 - **OpenAI選択時**: Realtime API (`gpt-realtime-whisper`)で文字起こし、`gpt-4.1-mini`で整形・翻訳・Copilot
 - **xAI選択時**: Grok Speech to Textで文字起こし、`grok-4.3`で整形・翻訳・Copilot
 - OpenAI/xAIのAPIキーは別々にKeychainへ保存でき、GUIで会議に使うプロバイダーを選択する
-- **会議タイトルの自動生成**: Claude Code CLI (`claude -p`) — Claude の Pro / Max サブスクリプション推奨。録音停止時にのみ使用
+- **会議タイトルの自動生成**: 選択中の AI プロバイダー（追加のセットアップ不要）
 - **システム音声の取得**: ScreenCaptureKit（macOS 標準）
 
 > **重要**: BlackHole などの仮想オーディオデバイスは **不要** です。
 > ScreenCaptureKit がシステム音声を直接キャプチャするため、オーディオルーティングの
 > 設定は要りません。古い記事で BlackHole + Multi-Output Device の設定を求めるものが
 > ありますが、本アプリ（ScreenCaptureKit 版）には当てはまりません。
-
-> **注意（規約）**: 会議タイトル生成機能はユーザー自身の Claude サブスクリプションを
-> Claude Code CLI 経由で使用します。[Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms)
-> を確認の上、自己責任でご利用ください。MeetScribe は Anthropic / OpenAI / xAI とは無関係の
-> 非公式プロジェクトです。
 
 ---
 
@@ -45,18 +40,12 @@ sw_vers
 # Swift toolchain（Xcode Command Line Tools）があるか
 swift --version || xcode-select --install
 
-# claude CLI があるか（会議タイトル自動生成に使う。なければタイムスタンプ名にフォールバック）
-which claude
-
 # openssl のバージョン（コード署名用証明書の作成に使う）
 openssl version
 ```
 
 - `sw_vers` の `ProductVersion` が **14 以上**であること。13 以下なら動作しません。
 - `swift --version` が失敗する場合は `xcode-select --install` をユーザーに実行してもらう。
-- `claude` が見つからない場合は、会議タイトルの自動生成を使うなら
-  [Claude Code 公式手順](https://docs.claude.com/en/docs/claude-code/quickstart) に従って
-  インストールするようユーザーに案内する（無くてもクラッシュせず、タイムスタンプ名で保存される）。
 - `openssl version` は OpenSSL 3.x 以外（LibreSSL 等、macOS 標準のもの）でも動作します。
   `scripts/setup-signing.sh` が自動でバージョンに応じたオプションを選択します。万一
   証明書の p12 作成でエラーが出た場合は、`brew install openssl@3` で OpenSSL 3.x を導入し、

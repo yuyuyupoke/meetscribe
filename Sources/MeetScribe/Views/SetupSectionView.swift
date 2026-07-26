@@ -1,15 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// 初回セットアップ (権限 + API Key 入力 + 知識源フォルダ) セクション。
+/// 初回セットアップ (権限 + API Key + 議事録保存先) セクション。
 /// すべて許可されて API Key も設定済みなら ContentView 側で非表示になる。
 struct SetupSectionView: View {
     let state: AppState
     /// 登録済みキーの変更モード。選択中プロバイダーごとに管理する。
     @State private var isEditingAPIKey = false
-    /// claude CLI の検出結果。nil = チェック中。`which` フォールバックが
-    /// プロセスを起動するためバックグラウンドで判定する。
-    @State private var claudeCLIInstalled: Bool?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -23,7 +20,7 @@ struct SetupSectionView: View {
                         .font(.scaled(10))
                 }
                 .buttonStyle(.borderless)
-                .help("権限・CLI の状態を再チェック")
+                .help("権限の状態を再チェック")
             }
             permissionRow(
                 label: "マイク (必須)",
@@ -38,22 +35,14 @@ struct SetupSectionView: View {
             providerRow
             apiKeyRow
             meetingsFolderRow
-            claudeCLIRow
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .task { await recheckClaudeCLI() }
     }
 
-    /// 権限と claude CLI をまとめて再チェックする (更新ボタン用)。
+    /// 権限をまとめて再チェックする (更新ボタン用)。
     private func refreshChecks() {
         PermissionManager.refreshAll()
-        Task { await recheckClaudeCLI() }
-    }
-
-    private func recheckClaudeCLI() async {
-        let found = await Task.detached { ClaudeQAClient.isClaudeInstalled }.value
-        claudeCLIInstalled = found
     }
 
     // MARK: - 議事録保存先フォルダ行 (必須)
@@ -202,38 +191,6 @@ struct SetupSectionView: View {
                 )
             }
         }
-    }
-
-    // MARK: - Claude CLI 行 (Q&A・タイトル生成に使用)
-
-    /// claude CLI の存在チェック。無くても録音・文字起こしはできるが、
-    /// 議事録タイトルの自動生成が使えない (タイムスタンプ名になる) ため、
-    /// セットアップ段階で気づけるようにする。
-    @ViewBuilder
-    private var claudeCLIRow: some View {
-        HStack {
-            switch claudeCLIInstalled {
-            case .some(true):
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            case .some(false):
-                Image(systemName: "questionmark.circle.fill").foregroundStyle(.orange)
-            case .none:
-                ProgressView().controlSize(.mini)
-            }
-            Text("Claude CLI (タイトル生成用・任意)")
-                .font(.scaled(11))
-            Spacer()
-            if claudeCLIInstalled == false {
-                Button("入手方法") {
-                    NSWorkspace.shared.open(URL(string: "https://code.claude.com/docs/ja/setup")!)
-                }
-                .buttonStyle(.borderless)
-                .font(.scaled(10))
-            }
-        }
-        .help(claudeCLIInstalled == false
-              ? "議事録タイトルの自動生成に使います。ターミナルで `npm install -g @anthropic-ai/claude-code` を実行後、右上の更新ボタンで再チェックしてください。無くても録音・文字起こし・要約は使えます (タイトルはタイムスタンプになります)。"
-              : "議事録タイトルの自動生成に使う Claude Code CLI")
     }
 
     // MARK: - 権限リクエスト

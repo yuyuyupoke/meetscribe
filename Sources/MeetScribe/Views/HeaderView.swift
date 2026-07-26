@@ -6,6 +6,7 @@ import AppKit
 struct HeaderView: View {
     let state: AppState
     @State private var showAISettings = false
+    @State private var showKillConfirmation = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -222,14 +223,29 @@ struct HeaderView: View {
         }
     }
 
+    /// 保存せずに録音を破棄する緊急停止。取り消せない操作なので必ず確認する
+    /// (停止ボタンの隣にあり、誤クリックすると会議の記録が丸ごと失われるため)。
     private var killSwitch: some View {
-        Button(action: { Task { await AudioSession.shared.kill() } }) {
+        Button(action: { showKillConfirmation = true }) {
             Image(systemName: "xmark.octagon.fill")
                 .foregroundStyle(.red.opacity(state.isRunning ? 1.0 : 0.3))
                 .font(.scaled(16))
         }
         .buttonStyle(.plain)
         .disabled(!state.isRunning)
-        .help("Kill Switch（緊急停止・保存せず）")
+        .accessibilityLabel("緊急停止（保存せずに破棄）")
+        .help("緊急停止（保存せずに破棄）")
+        .confirmationDialog(
+            "この会議の記録を保存せずに破棄しますか？",
+            isPresented: $showKillConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("破棄する", role: .destructive) {
+                Task { await AudioSession.shared.kill() }
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("これまでの文字起こしはすべて失われ、元に戻せません。議事録を残すには停止ボタンを使ってください。")
+        }
     }
 }

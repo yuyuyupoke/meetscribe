@@ -205,20 +205,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[SMOKE] Starting smoke test")
             let state = AppState.shared
 
-            // 1. ClaudeQAClient 初期化 (タイトル生成用)
-            do {
-                _ = try ClaudeQAClient()
-                NSLog("[SMOKE] ✅ ClaudeQAClient init passed")
-            } catch {
-                NSLog("[SMOKE] ⚠️ ClaudeQAClient init failed: \(error.localizedDescription)")
-            }
-
-            // 2. TranscriptStore 操作 (整形置換 + 対訳)
+            // 1. TranscriptStore 操作 (整形置換 + 対訳)
             TranscriptStore.shared.completeItem(itemId: "smk-t", finalText: "raw text", speaker: .me)
             TranscriptStore.shared.updateFinalText(itemId: "smk-t", text: "clean text", translation: "訳")
             NSLog("[SMOKE] ✅ transcript store passed")
 
-            // 3. Copilot 状態 (カード追加 + 全体像)
+            // 2. Copilot 状態 (カード追加 + 全体像)
             state.catchupCards.insert(
                 CatchupCard(periodLabel: "00:00〜00:03", minutes: 3, text: "テスト要約"),
                 at: 0
@@ -229,7 +221,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             state.overview = nil
             NSLog("[SMOKE] ✅ copilot state passed")
 
-            // 4. 権限状態更新
+            // 3. 権限状態更新
             state.microphonePermission = .granted
             state.screenRecordingPermission = .granted
             state.micLevel = 0.5
@@ -239,7 +231,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             state.systemLevel = 0.0
             NSLog("[SMOKE] ✅ state updates passed")
 
-            // 6. Phase 5 — 議事録保存フロー (タイトル生成はスキップ)
+            // 4. 議事録保存フロー (タイトル生成はスキップ)
             await Self.runPhase5SmokeTest()
 
             NSLog("[SMOKE] 🎉 all smoke tests passed")
@@ -311,6 +303,83 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// 録音中・停止処理中・保存中の終了は議事録を失うため、確認するか完了を待つ。
+    /// ×ボタン・⌘Q・メニューの終了はすべて terminate 経由なのでここで一括して塞げる。
+    /// (`applicationWillTerminate` → `shutdownSync` は保存を行わない)
+    public func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        let state = AppState.shared
+        // `.stopping` は「停止ボタンを押した直後」の状態。この間 isRunning も
+        // isSavingMeeting も false だが、裏では整形バッチの flush (LLM往復あり) が
+        // 走っており、ここで即終了すると議事録が失われる。
+        let isBusy = state.isRunning
+            || state.isSavingMeeting
+            || state.captureStatus == .stopping
+        guard isBusy else { return .terminateNow }
+
+        // 既に停止・保存が進行中なら、ユーザーは停止を選択済み。確認は挟まず完了を待つ。
+        guard state.isRunning else {
+            replyWhenSaveCompletes()
+            return .terminateLater
+        }
+
+        // メニューバーから終了した場合など、他アプリが前面だとアラートが背面に隠れて
+        // 「終了できないフリーズ」に見えるため、必ず前面に出す。
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "録音中です"
+        alert.informativeText = "このまま終了すると、この会議の議事録は保存されません。"
+        alert.addButton(withTitle: "保存して終了")      // .alertFirstButtonReturn
+        alert.addButton(withTitle: "キャンセル")         // .alertSecondButtonReturn
+        alert.addButton(withTitle: "保存せずに終了")     // .alertThirdButtonReturn
+        // 破棄は誤クリックの被害が大きいので、Escape/⌘. がキャンセルに割り当たるようにする
+        alert.buttons[1].keyEquivalent = "\u{1b}"
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            Task { @MainActor in
+                await AudioSession.shared.stop()
+                // 別経路 (無音タイムアウト / SCStream異常停止) が先に stop() を
+                // 走らせていた場合、自分の stop() は再入ガードで即座に返る。
+                // その保存フローの完了も待たないと終了で握り潰してしまう。
+                await Self.waitForSaveCompletion()
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        case .alertThirdButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
+
+    /// 進行中の停止・保存フローが終わってから終了を許可する。
+    private func replyWhenSaveCompletes() {
+        Task { @MainActor in
+            await Self.waitForSaveCompletion()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+    }
+
+    /// 停止・保存フローが落ち着くまで待つ。API がハングしても終了できなくならないよう
+    /// 上限を設ける (超過時は保存を諦めて終了する。議事録は退避保存側で拾える)。
+    @MainActor
+    private static func waitForSaveCompletion(
+        timeout: TimeInterval = 90
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while AppState.shared.isSavingMeeting
+                || AppState.shared.captureStatus == .stopping {
+            guard Date() < deadline else {
+                DebugLog.log("[MeetScribe] terminate: save wait timed out")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         // 共有オーディオリソース (Voice Processing IO / SCStream) を同期解放する。
         // これを怠ると coreaudiod に孤児リソースが残り、終了後に Mac 全体の
@@ -325,6 +394,8 @@ extension AppDelegate: NSWindowDelegate {
     /// ×ボタン = アプリ終了。applicationWillTerminate → shutdownSync で録音と
     /// 画面共有 (ScreenCaptureKit / SCStream) を停止してから終了する。
     /// 「隠す」のではなく「終了」する (ウィンドウを残したいときは −ボタンで最小化)。
+    /// 録音中は `applicationShouldTerminate` が確認ダイアログを出すため、
+    /// 誤クリックで議事録を失うことはない。
     public func windowShouldClose(_ sender: NSWindow) -> Bool {
         NSApp.terminate(nil)
         return false

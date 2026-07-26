@@ -68,10 +68,51 @@ enum TranscriptExporter {
             throw ExportError.saveDirectoryNotConfigured
         }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(makeFilename(for: record))
+        let url = availableURL(in: dir, filename: makeFilename(for: record))
         let content = render(record: record)
         try content.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    // MARK: - 退避保存
+
+    /// 通常の保存先に書けなかったときの退避先。
+    /// 保存先フォルダが移動・削除された、権限を失った、ディスクが足りない等でも
+    /// 会議の記録を失わないための最後の受け皿。
+    static var rescueDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/MeetScribe/rescue", isDirectory: true)
+    }
+
+    /// 議事録をアプリ管理下の退避フォルダへ保存する。`save` が失敗したときに使う。
+    @discardableResult
+    static func saveToRescue(_ record: MeetingRecord) throws -> URL {
+        let dir = rescueDirectory
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = availableURL(in: dir, filename: makeFilename(for: record))
+        try render(record: record).write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// 既存ファイルを上書きしない URL を返す。衝突時は `-2`, `-3`… を付ける。
+    /// タイトル生成に失敗すると `会議_HH-mm` が固定名になり、同じ分に2件保存すると
+    /// 先の議事録が黙って消えるため、書き込み前に必ず通す。
+    static func availableURL(in directory: URL, filename: String) -> URL {
+        let fm = FileManager.default
+        let candidate = directory.appendingPathComponent(filename)
+        guard fm.fileExists(atPath: candidate.path) else { return candidate }
+
+        let base = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        for suffix in 2...999 {
+            let name = ext.isEmpty ? "\(base)-\(suffix)" : "\(base)-\(suffix).\(ext)"
+            let url = directory.appendingPathComponent(name)
+            if !fm.fileExists(atPath: url.path) { return url }
+        }
+        // ここまで来たら連番が尽きている。既存を上書きするくらいなら一意名で残す。
+        let unique = String(UUID().uuidString.prefix(8)).lowercased()
+        let name = ext.isEmpty ? "\(base)-\(unique)" : "\(base)-\(unique).\(ext)"
+        return directory.appendingPathComponent(name)
     }
 
     // MARK: - Markdown

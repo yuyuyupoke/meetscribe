@@ -2,27 +2,37 @@
 
 ## アプリを開けません — 開発元が未確認
 
-アドホック署名により初回起動時に Gatekeeper が作動する。DMG内の `install.command` をダブルクリックすれば自動で解消するが、それでも開けない場合は手動で以下を実行する。
+MeetScribe は Apple の Developer Program に加入していない個人開発アプリのため、公証（notarization）を受けていない。初回起動時のみ macOS がブロックする。
+
+**macOS 15 (Sequoia) 以降**
+
+1. 一度アプリを起動して、ブロックのダイアログを閉じる
+2. **システム設定 → プライバシーとセキュリティ** を開く
+3. 下にスクロールし「"MeetScribe" は開発元を確認できないため…」の横の **「このまま開く」** をクリック
+4. Touch ID またはパスワードで承認する
+
+手順3のボタンは、アプリの起動を試みてから**約1時間だけ**表示される。見当たらない場合は、もう一度アプリを起動してから設定を開き直す。
+
+**macOS 14 (Sonoma) 以前**
+
+`Applications` 内の MeetScribe を右クリック →「開く」でも許可できる（この方法は macOS 15 以降では使えない）。
+
+**それでも開けない場合**
+
+ダウンロード時に付与された検疫属性を手動で外す。
 
 ```bash
 xattr -cr "/Applications/MeetScribe.app"
+open "/Applications/MeetScribe.app"
 ```
-
-その後、アプリを右クリックして **開く** を選択。
 
 ## "The Realtime Beta API is no longer supported" エラーが出る
 
 OpenAI Realtime API Beta エンドポイントは廃止済み。最新リリースに更新せよ。
 
-## "claude CLI not found" エラーが出る
+## 議事録のタイトルが「会議_14-30」のようになる
 
-会議タイトルの自動生成には Claude Code が `$PATH` 上で利用可能な状態でインストールされている必要がある（無くてもクラッシュせず、タイムスタンプ名で保存される）。
-
-```bash
-which claude
-```
-
-インストール: [docs.claude.com/en/docs/claude-code/quickstart](https://docs.claude.com/en/docs/claude-code/quickstart)
+会議タイトルの自動生成は、選択中の AI プロバイダーの API キーで行われる。API キーが未設定・無効・残高不足の場合や、生成に失敗した場合はタイムスタンプ名で保存される（クラッシュはしない）。フッターの🔑からキーの状態を確認する。
 
 ## VU メーターは動くが文字起こしされない
 

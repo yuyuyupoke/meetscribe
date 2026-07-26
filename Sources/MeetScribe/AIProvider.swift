@@ -157,4 +157,6 @@ enum PromptCacheKey {
     static var catchup: String { "meetscribe-catchup-\(installID)" }
     /// 会議の全体像の自動更新
     static var overview: String { "meetscribe-overview-\(installID)" }
+    /// 議事録タイトルの生成
+    static var title: String { "meetscribe-title-\(installID)" }
 }

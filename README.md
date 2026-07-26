@@ -23,7 +23,7 @@ MeetScribe は、マイク音声とシステム音声を並列で文字起こし
 - **デュアルストリーム文字起こし** — マイクとシステム音声を独立にキャプチャし、OpenAI `gpt-realtime-whisper` または xAI Grok Speech to Textへ話者ラベル付きでストリーミング。
 - **インライン整形・翻訳** — OpenAI選択時は`gpt-4.1-mini`、xAI選択時は`grok-4.3`でフィラー除去・言い直し統合・日本語対訳を生成。
 - **Copilot パネル** — ボタン押下で直近 1/3/5/10 分の発話を日本語で要約する「Catchup」と、発話量・経過時間トリガーで自動更新される「全体像」（目的・議題・現在地）。
-- **自動タイトル生成** — 停止時に `claude -p` 経由で Claude が会議タイトルを生成し、`YYYY-MM-DD_HH-mm_<title>.md` として保存。
+- **自動タイトル生成** — 停止時に選択中のAIが会議タイトルを生成し、`YYYY-MM-DD_HH-mm_<title>.md` として保存。
 - **フローティングパネル** — 常に最前面、サイズ可変、画面共有から非表示（ステルスウィンドウ）。
 - **エコーキャンセル** — Voice Processing（AEC + AGC + ノイズ抑制）でオンライン会議での二重キャプチャを防止。
 - **低オーバーヘッド** — VU メータと権限チェックをスロットリングし、終日利用に耐える設計。
@@ -34,8 +34,11 @@ MeetScribe は、マイク音声とシステム音声を並列で文字起こし
 |---|---|
 | OS | macOS 14 (Sonoma) 以降 |
 | AI API | OpenAI（`gpt-realtime-whisper` + `gpt-4.1-mini`）またはxAI（Grok Speech to Text + `grok-4.3`）のAPIキー。両方登録してGUIで切り替え可能 |
-| Claude Code | `$PATH` 上の `claude` CLI（会議タイトル生成のみに使用。Pro または Max サブスク推奨） |
 | 権限 | マイク、画面収録 |
+
+文字起こし・整形・要約・議事録タイトルの生成はすべて、あなたが設定したAPIキーで直接
+OpenAI または xAI に送信されます。開発者のサーバーは存在せず、会議のデータが開発者に
+渡ることはありません。詳細は [PRIVACY.md](PRIVACY.md) を参照してください。
 
 コスト目安: xAI Streaming STTは音声1時間あたり$0.20なので、30分会議を2ストリームで処理した文字起こし費は最大約$0.20。OpenAIは現行品質・互換性を優先して`gpt-realtime-whisper`を維持する。いずれも整形・翻訳・Copilotのテキストトークン料金は別途発生する。
 
@@ -45,18 +48,37 @@ MeetScribe は、マイク音声とシステム音声を並列で文字起こし
 > AI エージェントに「[SETUP.md](SETUP.md) を読んでセットアップして」と依頼するだけで、
 > ビルドから権限設定・API キー登録まで対話的に完了できます。
 
-[Releases](https://github.com/yuyuyupoke/meetscribe/releases) から最新の DMG をダウンロードし、以下の手順でインストールする。
+[Releases](https://github.com/yuyuyupoke/meetscribe/releases) から最新の DMG をダウンロードする。
 
 1. `MeetScribe-*.dmg` をダブルクリックしてマウント
-2. マウントされたウィンドウ内の **`install.command`** をダブルクリック
-3. Terminal が自動起動してセットアップが進み、完了すると MeetScribe が起動する
+2. `MeetScribe.app` を `Applications` フォルダへドラッグ
+3. `Applications` から MeetScribe を起動
 
-> `install.command` がうまく動かない場合の手動代替手段（ad-hoc 署名のため初回のみ Gatekeeper にブロックされる）。
+**初回起動時に「開発元を確認できないため開けません」と表示された場合**
+
+MeetScribe は Apple の有料 Developer Program に加入していない個人開発アプリのため、
+公証（notarization）を受けていません。そのため初回のみ macOS が起動をブロックします。
+次の手順で許可してください（macOS 15 Sequoia 以降）。
+
+1. 一度アプリを起動して、ブロックのダイアログを閉じる
+2. **システム設定 → プライバシーとセキュリティ** を開く
+3. 下にスクロールし「"MeetScribe" は開発元を確認できないため…」の横の **「このまま開く」** をクリック
+4. Touch ID またはパスワードで承認する
+
+> 手順3のボタンは、アプリの起動を試みてから**約1時間だけ**表示されます。見当たらない場合は、
+> もう一度アプリを起動してから設定を開き直してください。
+>
+> macOS 14 以前では、`Applications` 内のアプリを右クリック →「開く」でも許可できます
+> （この方法は macOS 15 以降では使えません）。
+>
+> それでも開けない場合は、ダウンロード時に付与された検疫属性を手動で外してください。
 >
 > ```bash
 > xattr -cr "/Applications/MeetScribe.app"
 > open "/Applications/MeetScribe.app"
 > ```
+
+セキュリティが気になる場合は、次のセクションのとおりソースからビルドしてください。
 
 もしくはソースからビルド。
 
@@ -69,7 +91,9 @@ cd meetscribe
 
 ## Usage
 
-初回起動時にAIプロバイダーを選び、そのAPIキー、出力フォルダ、必要に応じてナレッジフォルダを設定する。OpenAI/xAIのキーは別々にKeychainへ保存され、フッターの設定からいつでも追加・変更できる。
+初回起動時に、データの取り扱いについての説明が表示される。内容を確認して同意すると録音が使えるようになる。
+
+その後、AIプロバイダーを選び、APIキーと議事録の出力フォルダを設定する。OpenAI/xAIのキーは別々にKeychainへ保存され、フッターの設定からいつでも追加・変更できる。
 
 **会議を録音する**
 
@@ -122,7 +146,7 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.p
 │                          │  Catchup要約 / 全体像 │         │          │
 │                          └─────────────────────┘         │          │
 │  ┌─────────────────────┐                                 │          │
-│  │ TranscriptExporter  │◀─ 停止時タイトル生成 (claude -p) │          │
+│  │ TranscriptExporter  │◀─ 停止時タイトル生成 (選択中AI)  │          │
 │  │   Markdown out      │                                 │          │
 │  └─────────────────────┘                                 │          │
 └──────────────────────────────────────────────────────────────────┘
@@ -138,7 +162,6 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.p
 | `TranscriptCleaner.swift` | 選択プロバイダーによる確定セグメントの整形・対訳 |
 | `CopilotController.swift` | Catchup 要約・全体像自動更新のロジック統括 |
 | `OpenAIChatClient.swift` | OpenAI互換chat/completions共通クライアント（OpenAI / xAI） |
-| `ClaudeQAClient.swift` | Claude CLI サブプロセス（会議タイトル生成のみ） |
 | `TranscriptExporter.swift` | Markdown レンダリング |
 | `FloatingPanel.swift` | `NSWindow` フローティングパネル |
 
@@ -146,6 +169,7 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.p
 
 - [セットアップガイド（AI 向け）](SETUP.md)
 - [トラブルシューティング](docs/TROUBLESHOOTING.md)
+- [プライバシーについて](PRIVACY.md)
 - [変更履歴](CHANGELOG.md)
 - [セキュリティポリシー](SECURITY.md)
 
@@ -161,7 +185,7 @@ MeetScribe で時間を節約できたなら、[note で開発を応援する](h
 
 MeetScribe は個人が開発した非公式プロジェクトであり、Anthropic, PBC、OpenAI, Inc.、xAIとは一切関係がなく、これらの企業による承認・提携・後援を受けていません。「Claude」「OpenAI」「Grok」「gpt-realtime-whisper」等は各社の商標です。
 
-会議タイトル生成機能はユーザーのマシン上で Claude Code CLI (`claude -p`) を呼び出し、ユーザー自身の Claude サブスクリプションを使用します。サブスクリプションの利用は [Anthropic の利用規約](https://www.anthropic.com/legal/consumer-terms) に従う必要があります。本ソフトウェアの利用は自己責任で行ってください。
+文字起こし・整形・要約・タイトル生成はすべて、ユーザー自身が設定した OpenAI / xAI の APIキーで実行されます。API の利用料金はユーザーの負担となり、各社の利用規約に従う必要があります。本ソフトウェアの利用は自己責任で行ってください。
 
 ## License
 

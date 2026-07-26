@@ -238,6 +238,9 @@ final class AudioSession {
         let startedAt = AppState.shared.meetingStartedAt
         let endedAt = Date()
         let sessionProvider = activeProvider ?? AppState.shared.selectedProvider
+        // tearDown() で activeAPIKey がクリアされる前に退避する
+        // (この後の runSaveFlow でタイトル生成に使う)
+        let sessionAPIKey = activeAPIKey ?? KeychainStore.read(for: sessionProvider)
         CopilotController.shared.endSession()
         microphone.stop()
         await systemAudio.stop()
@@ -264,7 +267,8 @@ final class AudioSession {
             startedAt: startedAt,
             endedAt: endedAt,
             meetingEntries: meetingEntries,
-            provider: sessionProvider
+            provider: sessionProvider,
+            apiKey: sessionAPIKey
         )
         AppState.shared.meetingStartedAt = nil
     }
@@ -319,15 +323,20 @@ final class AudioSession {
         startedAt: Date,
         endedAt: Date,
         meetingEntries: [TranscriptEntry],
-        provider: AIProvider
+        provider: AIProvider,
+        apiKey: String?
     ) async {
         AppState.shared.isSavingMeeting = true
         defer { AppState.shared.isSavingMeeting = false }
 
-        // 1. タイトル生成 (Claude sonnet ~15秒)
+        // 1. タイトル生成 (会議で使用中のプロバイダーのチャットモデル)
         let transcriptText = TranscriptStore.shared.meetingTranscriptText
-        let title = await MeetingTitleGenerator.generate(from: transcriptText)
-        DebugLog.log("[MeetScribe] generated title: \(title)")
+        let title = await MeetingTitleGenerator.generate(
+            from: transcriptText,
+            apiKey: apiKey,
+            provider: provider
+        )
+        DebugLog.log("[MeetScribe] generated title (\(title.count) chars)")
 
         // 2. レコード組み立て + 保存。
         // タイトル生成 (~15秒) の間に GPT-4.1 mini の整形結果が届くことがあるため、
@@ -349,10 +358,24 @@ final class AudioSession {
         do {
             let url = try TranscriptExporter.save(record, to: AppState.shared.meetingsSaveDirectoryURL)
             AppState.shared.lastSavedURL = url
-            DebugLog.log("[MeetScribe] saved to: \(url.path)")
+            // ファイル名には AI 生成タイトル (= 会議内容の要約) が入るため、
+            // 保存先ディレクトリまでに留める
+            DebugLog.log("[MeetScribe] saved to: \(url.deletingLastPathComponent().path)")
         } catch {
-            AppState.shared.lastError = "議事録保存失敗: \(error.localizedDescription)"
             DebugLog.log("[MeetScribe] save failed: \(error.localizedDescription)")
+            // 保存先に書けなかった (フォルダ消失・権限喪失・ディスク不足等)。
+            // 会議の記録を失わないよう、アプリ管理下の退避フォルダへ逃がす。
+            do {
+                let rescueURL = try TranscriptExporter.saveToRescue(record)
+                AppState.shared.lastSavedURL = rescueURL
+                AppState.shared.lastError =
+                    "保存先に書き込めなかったため、バックアップに保存しました: \(rescueURL.path)"
+                DebugLog.log("[MeetScribe] rescued to: \(rescueURL.deletingLastPathComponent().path)")
+            } catch {
+                AppState.shared.lastError =
+                    "議事録の保存に失敗しました: \(error.localizedDescription)"
+                DebugLog.log("[MeetScribe] rescue save also failed: \(error.localizedDescription)")
+            }
         }
     }
 

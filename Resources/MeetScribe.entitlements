@@ -5,8 +5,11 @@
     <!-- マイク録音 -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
-    <!-- デバッガアタッチ許可 (ad-hoc開発用) -->
-    <key>com.apple.security.get-task-allow</key>
-    <true/>
+    <!--
+      com.apple.security.get-task-allow は意図的に含めない。
+      有効だと他プロセスからデバッガをアタッチでき、メモリ上のAPIキーや
+      会議音声を読み取られうる。公証 (notarization) でも拒否される。
+      ローカルでデバッガを使いたいときだけ一時的に付与すること。
+    -->
 </dict>
 </plist>

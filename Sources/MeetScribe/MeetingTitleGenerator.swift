@@ -1,48 +1,63 @@
 import Foundation
 
 /// 会議の文字起こしから短いタイトルを自動生成する。
-/// claude -p --model sonnet で15文字以内のタイトルを取得する。
+///
+/// 会議で使用中のプロバイダー (OpenAI / xAI) のチャットモデルを使う。
+/// 外部CLIには依存しないので、ユーザーが用意したAPIキーだけで完結し、
+/// 送信先も文字起こし・整形と同じ1社に閉じる。
 enum MeetingTitleGenerator {
-    /// 生成する。失敗したらタイムスタンプベースのフォールバックを返す。
-    static func generate(from transcript: String) async -> String {
-        // 空 or 短すぎる場合はフォールバック
-        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 20 else {
-            return fallbackTitle()
-        }
-
-        let prompt = buildPrompt(transcript: trimmed)
-        do {
-            let client = try ClaudeQAClient()
-            let raw = try await client.invokeRaw(prompt: prompt, model: .sonnet)
-            let title = cleanUp(raw)
-            return title.isEmpty ? fallbackTitle() : title
-        } catch {
-            DebugLog.log("[title] generation failed: \(error.localizedDescription)")
-            return fallbackTitle()
-        }
-    }
-
-    // MARK: -
-
-    private static func buildPrompt(transcript: String) -> String {
-        """
-        以下は会議のリアルタイム文字起こしです。
-        この会議にふさわしい簡潔なタイトルを日本語で1つだけ出力してください。
+    static let systemPrompt = """
+        あなたは会議のタイトルを付ける専門家です。
+        渡された会議の文字起こしから、ふさわしい簡潔なタイトルを日本語で1つだけ出力してください。
 
         ルール:
         - 全角で15文字以内
         - 会議の主題を表す名詞句
         - 余分な説明、句読点、引用符は付けない
         - タイトルの文字列だけを返す (改行なし)
-
-        <transcript>
-        \(transcript.prefix(3000))
-        </transcript>
         """
+
+    /// 生成する。失敗したらタイムスタンプベースのフォールバックを返す。
+    /// - Parameter apiKey: 会議で使用中のプロバイダーのAPIキー。nil ならフォールバック。
+    static func generate(
+        from transcript: String,
+        apiKey: String?,
+        provider: AIProvider
+    ) async -> String {
+        // 空 or 短すぎる場合はフォールバック
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 20 else {
+            return fallbackTitle()
+        }
+        guard let apiKey, !apiKey.isEmpty else {
+            DebugLog.log("[title] no API key → fallback title")
+            return fallbackTitle()
+        }
+
+        let (content, costUSD) = await OpenAIChatClient.complete(
+            system: systemPrompt,
+            user: String(trimmed.prefix(3000)),
+            apiKey: apiKey,
+            provider: provider,
+            timeout: 20,
+            cacheKey: PromptCacheKey.title
+        )
+        if costUSD > 0 {
+            await MainActor.run { AppState.shared.addCost(costUSD) }
+        }
+        guard let content else {
+            DebugLog.log("[title] generation failed → fallback title")
+            return fallbackTitle()
+        }
+        let title = cleanUp(content)
+        return title.isEmpty ? fallbackTitle() : title
     }
 
-    private static func cleanUp(_ raw: String) -> String {
+    // MARK: -
+
+    /// LLM の生出力からタイトルとして使える文字列を取り出す。
+    /// 指示に反して引用符・接頭辞・改行を付けてくることがあるため、必ず通す。
+    static func cleanUp(_ raw: String) -> String {
         let trimmed = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\n", with: " ")

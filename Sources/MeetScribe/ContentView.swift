@@ -36,6 +36,12 @@ struct ContentView: View {
         .task {
             PermissionManager.refreshAll()
         }
+        // 初回起動時の外部送信・録音についての説明。同意するまで閉じられない
+        // (未同意の間は canStart も false なので録音は始まらない)。
+        .sheet(isPresented: .constant(!state.hasAcceptedDisclosure)) {
+            DisclosureConsentView(state: state)
+                .interactiveDismissDisabled()
+        }
     }
 
     private var setupComplete: Bool {

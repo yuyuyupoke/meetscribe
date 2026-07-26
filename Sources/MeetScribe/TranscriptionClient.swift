@@ -681,7 +681,9 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 let count = deltaCount
                 stateLock.unlock()
                 if count == 1 {
-                    DebugLog.log("[\(speaker.rawValue)] first delta received: '\(delta)'")
+                    // 会議の発話内容はログに残さない (文字数のみ)。
+                    // ログは平文で長期間ディスクに残るため、議事録の二重保存にしない。
+                    DebugLog.logTranscript("[\(speaker.rawValue)] first delta received", text: delta)
                 }
                 let speaker = self.speaker
                 Task { @MainActor in
@@ -844,11 +846,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         }
         let speaker = self.speaker
         if HallucinationFilter.shouldFilter(trimmed) {
-            DebugLog.log("[\(speaker.rawValue)] hallucination filtered: '\(trimmed)'")
+            DebugLog.logTranscript("[\(speaker.rawValue)] hallucination filtered", text: trimmed)
             Task { @MainActor in TranscriptStore.shared.removeItem(itemId: itemId) }
             return
         }
-        DebugLog.log("[\(speaker.rawValue)] completed: '\(trimmed)'")
+        DebugLog.logTranscript("[\(speaker.rawValue)] completed", text: trimmed)
         Task { @MainActor in
             TranscriptStore.shared.completeItem(
                 itemId: itemId,

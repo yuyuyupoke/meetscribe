@@ -80,6 +80,13 @@ final class AppState {
         didSet { UserDefaults.standard.set(showTranslations, forKey: Self.translationsKey) }
     }
 
+    /// 外部送信と録音についての説明に同意済みか。
+    /// 音声が第三者API (OpenAI / xAI) へ送られること、会議参加者への録音告知が
+    /// 利用者の責任であることを、最初の録音より前に必ず提示する。
+    var hasAcceptedDisclosure: Bool = false {
+        didSet { UserDefaults.standard.set(hasAcceptedDisclosure, forKey: Self.disclosureKey) }
+    }
+
     // MARK: - UI 文字スケール (⌘+ / ⌘- / ⌘0)
 
     /// UI 全体の文字スケール (1.0 = 標準)。フォントサイズに乗算して適用する。
@@ -168,6 +175,7 @@ final class AppState {
         if UserDefaults.standard.object(forKey: Self.translationsKey) != nil {
             self.showTranslations = UserDefaults.standard.bool(forKey: Self.translationsKey)
         }
+        self.hasAcceptedDisclosure = UserDefaults.standard.bool(forKey: Self.disclosureKey)
         let storedScale = UserDefaults.standard.double(forKey: Self.uiScaleKey)
         if storedScale > 0 {
             // 破損・旧バージョン値対策で必ず範囲へクランプする
@@ -185,6 +193,7 @@ final class AppState {
     static let supportedLanguages: Set<String> = ["auto", "ja", "en"]
     private static let translationsKey = "showTranslations"
     private static let uiScaleKey = "uiScale"
+    private static let disclosureKey = "hasAcceptedDisclosure"
 
     private static func persistFolder(_ url: URL?, key: String) {
         let defaults = UserDefaults.standard
@@ -247,13 +256,14 @@ final class AppState {
         }
     }
 
-    /// 録音開始できる状態か (権限 + API Key + 議事録保存先 + 開始可能ステータス)
+    /// 録音開始できる状態か (同意 + 権限 + API Key + 議事録保存先 + 開始可能ステータス)
     var canStart: Bool {
         Self.computeCanStart(
             permissionsGranted: allPermissionsGranted,
             hasAPIKey: hasAPIKey,
             saveFolderSet: meetingsSaveDirectoryURL != nil,
-            status: captureStatus
+            status: captureStatus,
+            disclosureAccepted: hasAcceptedDisclosure
         )
     }
 
@@ -266,7 +276,8 @@ final class AppState {
             hasAPIKey: hasAPIKey,
             providerName: selectedProvider.shortDisplayName,
             saveFolderSet: meetingsSaveDirectoryURL != nil,
-            status: captureStatus
+            status: captureStatus,
+            disclosureAccepted: hasAcceptedDisclosure
         )
     }
 
@@ -278,8 +289,10 @@ final class AppState {
         hasAPIKey: Bool,
         providerName: String = "選択中プロバイダー",
         saveFolderSet: Bool,
-        status: CaptureStatus
+        status: CaptureStatus,
+        disclosureAccepted: Bool
     ) -> String? {
+        if !disclosureAccepted { return "ご利用前の説明への同意が必要です" }
         if !microphoneGranted { return "マイク権限の許可が必要です" }
         if !screenRecordingGranted { return "画面収録権限の許可が必要です" }
         if !hasAPIKey { return "\(providerName) APIキーが未設定です（フッターの🔑から登録）" }
@@ -296,11 +309,15 @@ final class AppState {
     /// `.error` からも開始可能にする — 接続タイムアウト等でエラーになった後、
     /// アプリ再起動しないと録音ボタンが復活しない事故を防ぐ (再試行はいつでも安全:
     /// start() は冒頭で状態をリセットして進むため)。
+    /// - Parameter disclosureAccepted: 外部送信・録音についての説明への同意。
+    ///   同意前に音声を第三者APIへ送らないための最終ガード (UI側はシートで強制する)。
+    ///   省略できるようにすると新しい呼び出し元が同意チェックを素通りしうるため必須にする。
     static func computeCanStart(
         permissionsGranted: Bool,
         hasAPIKey: Bool,
         saveFolderSet: Bool,
-        status: CaptureStatus
+        status: CaptureStatus,
+        disclosureAccepted: Bool
     ) -> Bool {
         let startable: Bool
         switch status {
@@ -309,6 +326,6 @@ final class AppState {
         case .starting, .running, .stopping:
             startable = false
         }
-        return permissionsGranted && hasAPIKey && saveFolderSet && startable
+        return permissionsGranted && hasAPIKey && saveFolderSet && startable && disclosureAccepted
     }
 }
