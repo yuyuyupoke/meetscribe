@@ -358,6 +358,7 @@ final class AudioSession {
         do {
             let url = try TranscriptExporter.save(record, to: AppState.shared.meetingsSaveDirectoryURL)
             AppState.shared.lastSavedURL = url
+            AppState.shared.meetingSaveCount += 1
             // ファイル名には AI 生成タイトル (= 会議内容の要約) が入るため、
             // 保存先ディレクトリまでに留める
             DebugLog.log("[MeetScribe] saved to: \(url.deletingLastPathComponent().path)")

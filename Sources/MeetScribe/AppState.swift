@@ -80,6 +80,58 @@ final class AppState {
         didSet { UserDefaults.standard.set(showTranslations, forKey: Self.translationsKey) }
     }
 
+    // MARK: - 開発の応援バナー
+
+    /// 議事録を保存した累計回数。応援バナーの表示判定に使う。
+    var meetingSaveCount: Int = 0 {
+        didSet { UserDefaults.standard.set(meetingSaveCount, forKey: Self.saveCountKey) }
+    }
+
+    /// 応援バナーを最後に表示した日時。
+    var supportPromptLastShownAt: Date? {
+        didSet {
+            UserDefaults.standard.set(
+                supportPromptLastShownAt?.timeIntervalSince1970 ?? 0,
+                forKey: Self.supportShownKey
+            )
+        }
+    }
+
+    /// 「今後表示しない」を選んだか。
+    var supportPromptDismissed: Bool = false {
+        didSet { UserDefaults.standard.set(supportPromptDismissed, forKey: Self.supportDismissedKey) }
+    }
+
+    /// 応援バナーを出す最小保存回数。数回使って価値を感じてもらってから初めて出す。
+    nonisolated static let supportPromptMinSaves = 3
+    /// 一度出したら次に出すまで置く間隔。
+    nonisolated static let supportPromptInterval: TimeInterval = 30 * 24 * 60 * 60
+
+    /// 応援バナーを表示すべきか (純関数)。
+    /// 押し付けにならないよう「十分使った」「前回から間隔が空いた」「拒否していない」
+    /// の3条件を満たすときだけ出す。
+    nonisolated static func shouldShowSupportPrompt(
+        saveCount: Int,
+        lastShownAt: Date?,
+        dismissed: Bool,
+        now: Date
+    ) -> Bool {
+        guard !dismissed else { return false }
+        guard saveCount >= supportPromptMinSaves else { return false }
+        guard let lastShownAt else { return true }
+        return now.timeIntervalSince(lastShownAt) >= supportPromptInterval
+    }
+
+    /// 現在の状態で応援バナーを出すべきか。
+    var shouldShowSupportPrompt: Bool {
+        Self.shouldShowSupportPrompt(
+            saveCount: meetingSaveCount,
+            lastShownAt: supportPromptLastShownAt,
+            dismissed: supportPromptDismissed,
+            now: Date()
+        )
+    }
+
     /// 外部送信と録音についての説明に同意済みか。
     /// 音声が第三者API (OpenAI / xAI) へ送られること、会議参加者への録音告知が
     /// 利用者の責任であることを、最初の録音より前に必ず提示する。
@@ -176,6 +228,12 @@ final class AppState {
             self.showTranslations = UserDefaults.standard.bool(forKey: Self.translationsKey)
         }
         self.hasAcceptedDisclosure = UserDefaults.standard.bool(forKey: Self.disclosureKey)
+        self.meetingSaveCount = UserDefaults.standard.integer(forKey: Self.saveCountKey)
+        self.supportPromptDismissed = UserDefaults.standard.bool(forKey: Self.supportDismissedKey)
+        let shownAt = UserDefaults.standard.double(forKey: Self.supportShownKey)
+        if shownAt > 0 {
+            self.supportPromptLastShownAt = Date(timeIntervalSince1970: shownAt)
+        }
         let storedScale = UserDefaults.standard.double(forKey: Self.uiScaleKey)
         if storedScale > 0 {
             // 破損・旧バージョン値対策で必ず範囲へクランプする
@@ -194,6 +252,9 @@ final class AppState {
     private static let translationsKey = "showTranslations"
     private static let uiScaleKey = "uiScale"
     private static let disclosureKey = "hasAcceptedDisclosure"
+    private static let saveCountKey = "meetingSaveCount"
+    private static let supportShownKey = "supportPromptLastShownAt"
+    private static let supportDismissedKey = "supportPromptDismissed"
 
     private static func persistFolder(_ url: URL?, key: String) {
         let defaults = UserDefaults.standard

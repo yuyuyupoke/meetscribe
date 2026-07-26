@@ -49,22 +49,17 @@ struct CopilotPanelView: View {
         return "待機中"
     }
 
-    /// 開発者サポート (note サポート記事へ遷移)。アイコンだけのさりげない配置。
+    /// 開発の応援 (note へ遷移)。いつでも押せるさりげない常設導線。
+    /// 保存直後に出る `TranscriptListView` の応援バナーとは役割が違うので両方置く。
     private var supportButton: some View {
-        Button(action: openSupportLink) {
+        Button(action: { SupportLink.open() }) {
             Image(systemName: "cup.and.saucer.fill")
                 .font(.scaled(11))
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
-        .help("開発者を note で応援する")
-    }
-
-    private func openSupportLink() {
-        guard let url = URL(string: "https://note.com/yuyuyu303030jp/n/n17ba34bf2ffb?app_launch=false") else {
-            return
-        }
-        NSWorkspace.shared.open(url)
+        .accessibilityLabel("開発を応援する")
+        .help("\(SupportLink.suggestedAmountLabel)で開発を応援する（note が開きます）")
     }
 
     private var meetscribeIcon: some View {

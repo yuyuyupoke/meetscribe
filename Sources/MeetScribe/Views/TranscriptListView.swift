@@ -46,6 +46,45 @@ struct TranscriptListView: View {
             }
             if let savedURL = state.lastSavedURL {
                 savedBanner(url: savedURL)
+                if state.shouldShowSupportPrompt {
+                    supportPrompt
+                }
+            }
+        }
+    }
+
+    /// 議事録が保存できた直後 (= 価値を感じた瞬間) にだけ出す応援の導線。
+    /// 数回使ってから・30日に1回まで・「今後表示しない」あり、の3点で
+    /// 押し付けにならないようにしている。判定は `AppState.shouldShowSupportPrompt`。
+    private var supportPrompt: some View {
+        HStack(spacing: 6) {
+            Text("☕")
+                .font(.scaled(11))
+                .accessibilityHidden(true)
+            Text("議事録、お役に立ちましたか？ \(SupportLink.suggestedAmountLabel)で開発を応援できます。")
+                .font(.scaled(10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button("応援する") {
+                state.supportPromptLastShownAt = Date()
+                SupportLink.open()
+            }
+            .buttonStyle(.borderless)
+            .font(.scaled(10))
+            Button("今後表示しない") {
+                state.supportPromptDismissed = true
+            }
+            .buttonStyle(.borderless)
+            .font(.scaled(10))
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .task {
+            // 表示した時点で間隔を開始する (押さずに閉じた場合も次回まで置く)
+            if state.supportPromptLastShownAt == nil {
+                state.supportPromptLastShownAt = Date()
             }
         }
     }

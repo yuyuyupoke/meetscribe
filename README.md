@@ -44,9 +44,30 @@ OpenAI または xAI に送信されます。開発者のサーバーは存在�
 
 ## Install
 
-> **AI にセットアップを任せる場合**: このリポジトリを clone し、Claude Code などの
-> AI エージェントに「[SETUP.md](SETUP.md) を読んでセットアップして」と依頼するだけで、
-> ビルドから権限設定・API キー登録まで対話的に完了できます。
+### 方法A: AI エージェントにセットアップを任せる（推奨）
+
+このリポジトリを clone して、Claude Code などの AI エージェントに
+**「[SETUP.md](SETUP.md) を読んでセットアップして」** と依頼するだけ。
+ビルドから権限設定・API キー登録まで対話的に完了します。
+
+```bash
+git clone https://github.com/yuyuyupoke/meetscribe.git
+cd meetscribe
+# あとは AI に SETUP.md を読ませる
+```
+
+自分のマシンでビルドするため、**下記の「開発元を確認できません」警告は出ません**。
+API キーを自分で用意する使い方（BYOK）なので、この経路が最も相性が良いです。
+
+手動でビルドする場合:
+
+```bash
+./scripts/setup-signing.sh   # 初回のみ（ログインパスワードを求められます）
+./build.sh
+cp -R dist/MeetScribe.app /Applications/
+```
+
+### 方法B: DMG をダウンロードする
 
 [Releases](https://github.com/yuyuyupoke/meetscribe/releases) から最新の DMG をダウンロードする。
 
@@ -78,16 +99,7 @@ MeetScribe は Apple の有料 Developer Program に加入していない個人�
 > open "/Applications/MeetScribe.app"
 > ```
 
-セキュリティが気になる場合は、次のセクションのとおりソースからビルドしてください。
-
-もしくはソースからビルド。
-
-```bash
-git clone https://github.com/yuyuyupoke/meetscribe.git
-cd meetscribe
-./scripts/setup-signing.sh
-./build.sh
-```
+この警告を避けたい場合は、**方法A（ソースからビルド）**を使ってください。
 
 ## Usage
 
