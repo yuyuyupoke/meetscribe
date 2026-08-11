@@ -11,17 +11,43 @@ final class CopilotController {
     private init() {}
 
     // MARK: - 全体像の自動更新トリガー設定
+    //
+    // 2026-08-10 に61分の英語講義でコスト内訳を実測した結果、全体像 (Overview) の
+    // 自動更新が総額 $0.8197 の**40%超**を占めていた (STT 25% / 整形+対訳 32% を上回る)。
+    // 全体像は「目的/議題/現在地」という遅く動く情報なので、この頻度は明らかに過多。
+    // 各トリガーを約2倍に緩めて呼び出し回数を半分以下にする。
+    // 内部定数だが、閾値がテストで固定できるよう internal で公開している。
 
-    /// 監視ループの周期
-    private static let monitorInterval: TimeInterval = 30
+    /// 監視ループの周期 (コスト削減: 30→60 秒)
+    static let monitorInterval: TimeInterval = 60
+    /// 初回の全体像がまだ無いあいだの監視周期。
+    /// `monitorInterval` を60秒に伸ばすと**初回表示が最大60秒待ち**になり、
+    /// 「傍聴中…」が長く残って体感が悪い。初回は1会議1回しか走らずコストに影響しないので、
+    /// 従来の30秒を維持して初回だけ速く出す。
+    static let firstOverviewMonitorInterval: TimeInterval = 30
     /// 「発話量」トリガー: 前回更新から新規に確定した文字数がこれを超えたら更新
-    /// (コスト削減: 1,200→2,400 に緩め、全体像更新のLLM呼び出し頻度を半減)
-    private static let updateCharThreshold = 2_400
+    /// (コスト削減: 1,200→2,400 に緩めて呼び出しを半減 → 2026-08-10 の実測を受けて
+    ///  さらに 2,400→5,000。61分授業で Overview が総額の40%超だった)
+    static let updateCharThreshold = 5_000
     /// 「経過時間」トリガー: 前回更新からこの秒数が経過し、かつ最低限の新規発話があれば更新
-    private static let updateTimeThreshold: TimeInterval = 180
-    private static let minCharsForTimeUpdate = 200
-    /// 初回生成に必要な最低文字数 (これ未満は「傍聴中…」のまま)
-    private static let minCharsForFirstOverview = 300
+    /// (コスト削減: 180→300 秒 / 最低文字数 200→400。発話が薄い時間帯に
+    ///  ほぼ同じ内容の全体像を作り直すのを防ぐ)
+    static let updateTimeThreshold: TimeInterval = 300
+    static let minCharsForTimeUpdate = 400
+    /// 初回生成に必要な最低文字数 (これ未満は「傍聴中…」のまま)。
+    /// **変更しない**: ここは初回表示の速さ = 体感に直結し、1会議1回しか効かないので
+    /// コストにはほぼ影響しない。
+    static let minCharsForFirstOverview = 300
+    /// LLM へ渡す文字起こしの末尾クリップ幅。
+    ///
+    /// `updateCharThreshold` (新規5,000字で発火) より必ず**広く**なければならない:
+    /// 窓が新規発話量を下回ると、更新の合間に流れた発話が一度も全体像に反映されないまま
+    /// 窓の外へ出てしまう。2,400字閾値の頃は 6,000字で 2.5倍の余裕があったが、
+    /// 5,000字に緩めた時点で 1.2倍まで縮んでいた (`isOverviewUpdating` 中の取りこぼしや
+    /// 発話の急増で簡単に溢れる)。8,000字に広げて 1.6倍を確保する。
+    /// 入力は約+600トークン ($0.0008/回) 増えるが、発火自体が1/3になるので総額は下がる。
+    /// この不変条件は `CopilotControllerTests` で固定している。
+    static let overviewContextChars = 8_000
 
     private var monitorTask: Task<Void, Never>?
     /// 実行中の Catchup。セッション終了/再開時に cancel し、旧セッションの
@@ -50,7 +76,11 @@ final class CopilotController {
         monitorTask?.cancel()
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.monitorInterval))
+                // 初回だけ短い周期で見る (初回表示の体感を犠牲にせずコストを削る)。
+                let interval = AppState.shared.overview == nil
+                    ? Self.firstOverviewMonitorInterval
+                    : Self.monitorInterval
+                try? await Task.sleep(for: .seconds(interval))
                 if Task.isCancelled { return }
                 await self?.updateOverviewIfNeeded()
             }
@@ -120,7 +150,8 @@ final class CopilotController {
             apiKey: apiKey,
             provider: provider,
             timeout: 20,
-            cacheKey: PromptCacheKey.catchup
+            cacheKey: PromptCacheKey.catchup,
+            usageLabel: "catchup"
         )
         // セッション終了/再開で cancel された遅延応答は、新セッションの状態
         // (カードリスト・isCatchupRunning) に触らず破棄する。フラグは
@@ -197,10 +228,11 @@ final class CopilotController {
         AppState.shared.isOverviewUpdating = true
         defer { AppState.shared.isOverviewUpdating = false }
 
-        // 入力肥大を防ぐため末尾 ~6,000 文字に制限 (冒頭の目的把握は
+        // 入力肥大を防ぐため末尾を `overviewContextChars` 文字に制限 (冒頭の目的把握は
         // 既存 overview が引き継ぐため、直近の文脈を優先する。コスト削減のため
-        // 12,000→6,000 に縮小: 現在地把握には直近の文脈で十分)
-        let clipped = String(fullText.suffix(6_000))
+        // 12,000→6,000 に縮小 → 2026-08-10 に updateCharThreshold を5,000へ緩めたので、
+        // 更新の合間の発話を取りこぼさないよう 6,000→8,000 に戻した)
+        let clipped = String(fullText.suffix(Self.overviewContextChars))
         let userPrompt: String
         if let current = AppState.shared.overview {
             userPrompt = """
@@ -220,7 +252,8 @@ final class CopilotController {
             provider: provider,
             timeout: 20,
             forceJSON: true,
-            cacheKey: PromptCacheKey.overview
+            cacheKey: PromptCacheKey.overview,
+            usageLabel: "overview"
         )
         if costUSD > 0 { AppState.shared.addCost(costUSD) }
 

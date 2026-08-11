@@ -40,7 +40,8 @@ enum MeetingTitleGenerator {
             apiKey: apiKey,
             provider: provider,
             timeout: 20,
-            cacheKey: PromptCacheKey.title
+            cacheKey: PromptCacheKey.title,
+            usageLabel: "title"
         )
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }

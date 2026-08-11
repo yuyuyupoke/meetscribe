@@ -17,6 +17,11 @@ enum OpenAIChatClient {
     ///   xAI では `x-grok-conv-id` ヘッダーとして送り、同一キーのリクエストを同じ
     ///   サーバーへ寄せてキャッシュヒット率を上げる。送信内容・モデル・パラメータは
     ///   一切変わらないので応答品質には影響しない。
+    /// - Parameter reasoningEffort: `reasoning_effort` に送る値。既定は
+    ///   `ReasoningEffortPolicy.current` (= `none`)。`nil` はパラメータを付けない。
+    /// - Parameter usageLabel: usage 内訳ログに出す用途ラベル (例: `"overview"`)。
+    ///   どの用途がコストを食っているかを実数で切り分けるためだけに使い、
+    ///   リクエスト内容には一切影響しない。
     static func complete(
         system: String,
         user: String,
@@ -24,7 +29,9 @@ enum OpenAIChatClient {
         provider: AIProvider = .openAI,
         timeout: TimeInterval = 20,
         forceJSON: Bool = false,
-        cacheKey: String? = nil
+        cacheKey: String? = nil,
+        reasoningEffort: String? = ReasoningEffortPolicy.current,
+        usageLabel: String = "chat"
     ) async -> (text: String?, costUSD: Double) {
         guard let request = makeRequest(
             system: system,
@@ -33,21 +40,42 @@ enum OpenAIChatClient {
             provider: provider,
             timeout: timeout,
             forceJSON: forceJSON,
-            cacheKey: cacheKey
+            cacheKey: cacheKey,
+            reasoningEffort: reasoningEffort
         ) else {
             return (nil, 0)
         }
+
+        // 失敗ログに用途とパラメータを添える。`reasoning_effort` を送り始めた直後は
+        // 「どの用途のどのパラメータで 400 になったか」が分からないと切り分け不能になる
+        // (整形・要約は失敗しても原文を維持して静かに続くため、ログしか手掛かりがない)。
+        // 出すのは検証済みラベル・プロバイダー定義値・ホワイトリスト済み effort のみで、
+        // 本文やレスポンス body は含めない。
+        let failureContext = "label=\(sanitizedUsageLabel(usageLabel))"
+            + " provider=\(provider.rawValue) model=\(provider.chatModel)"
+            + " effort=\(sanitizedEffort(provider.supportsReasoningEffort ? reasoningEffort : nil))"
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                DebugLog.log("[chat-client] HTTP \(status)")
+                DebugLog.log("[chat-client] HTTP \(status) \(failureContext)")
                 return (nil, 0)
+            }
+            // 用途ごとのトークン内訳を残す。2026-08-10 のコスト分析は
+            // 「Overview が総額の約40%」を回数×単価の推定で出すしかなく精度が低かったため、
+            // 次からは実数で切り分けられるようにする。**本文は一切書かない** (トークン数のみ)。
+            if let usage = usageObject(from: data) {
+                DebugLog.log(usageLogLine(
+                    usage: usage,
+                    provider: provider,
+                    label: usageLabel,
+                    effort: provider.supportsReasoningEffort ? reasoningEffort : nil
+                ))
             }
             return parseResponse(data, provider: provider)
         } catch {
-            DebugLog.log("[chat-client] request failed: \(error.localizedDescription)")
+            DebugLog.log("[chat-client] request failed: \(error.localizedDescription) \(failureContext)")
             return (nil, 0)
         }
     }
@@ -61,7 +89,8 @@ enum OpenAIChatClient {
         provider: AIProvider,
         timeout: TimeInterval = 20,
         forceJSON: Bool = false,
-        cacheKey: String? = nil
+        cacheKey: String? = nil,
+        reasoningEffort: String? = ReasoningEffortPolicy.current
     ) -> URLRequest? {
         var request = URLRequest(url: provider.chatEndpoint)
         request.httpMethod = "POST"
@@ -82,6 +111,11 @@ enum OpenAIChatClient {
         ]
         if forceJSON {
             body["response_format"] = ["type": "json_object"]
+        }
+        // 非推論モデル (gpt-4.1-mini) はこのパラメータを知らず、送ると 400 で
+        // リクエストが丸ごと落ちる = 整形・要約が全滅する。対応プロバイダーのみに限定する。
+        if let reasoningEffort, provider.supportsReasoningEffort {
+            body["reasoning_effort"] = reasoningEffort
         }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
             return nil
@@ -124,29 +158,27 @@ enum OpenAIChatClient {
     /// - 推論トークンは xAI では `completion_tokens` と別カウントなので加算する。
     ///   OpenAI は `completion_tokens` に含む仕様なので加算しない (二重計上を防ぐ)
     static func usageCost(_ usage: [String: Any], provider: AIProvider) -> Double {
-        let input: Int = max(usage["prompt_tokens"] as? Int ?? 0, 0)
-        let promptDetails = usage["prompt_tokens_details"] as? [String: Any]
-        let rawCached: Int = promptDetails?["cached_tokens"] as? Int ?? 0
-        // 想定外の値 (負数・prompt_tokens 超過) でコストが壊れないようクランプする
-        let cached: Int = min(max(rawCached, 0), input)
+        let input = promptTokens(usage)
+        let cached = cachedTokens(usage)
         // ticks を使う経路 (= xAI = ヘッダーを送る唯一のプロバイダー) でも
         // ヒット率を確認できるよう、コスト算出方法に関わらずログを出す。
         if cached > 0 {
             DebugLog.log("[chat-client] prompt cache hit: \(cached)/\(input) tokens")
         }
 
-        // 実請求額が返っていればそれが最も正確。0 は「無料」と「値の欠損」を
-        // 区別できないため権威扱いせず、トークン計算にフォールバックする。
-        if let ticks = usage["cost_in_usd_ticks"] as? Double, ticks > 0 {
-            return ticks / usdTicksPerDollar
+        // 実請求額が返っていればそれが最も正確。
+        if let billed = billedCostUSD(usage) {
+            return billed
         }
-        if let ticks = usage["cost_in_usd_ticks"] as? Int, ticks > 0 {
-            return Double(ticks) / usdTicksPerDollar
-        }
+        return tokenBasedCostUSD(usage, provider: provider)
+    }
 
-        let completion: Int = max(usage["completion_tokens"] as? Int ?? 0, 0)
-        let completionDetails = usage["completion_tokens_details"] as? [String: Any]
-        let reasoning: Int = max(completionDetails?["reasoning_tokens"] as? Int ?? 0, 0)
+    /// 単価表からコストを計算する (実請求額が無い API 用)。ログ副作用を持たない。
+    static func tokenBasedCostUSD(_ usage: [String: Any], provider: AIProvider) -> Double {
+        let input = promptTokens(usage)
+        let cached = cachedTokens(usage)
+        let completion = completionTokens(usage)
+        let reasoning = reasoningTokens(usage)
         let billedOutput: Int = provider.reasoningTokensExcludedFromCompletion
             ? completion + reasoning
             : completion
@@ -155,5 +187,123 @@ enum OpenAIChatClient {
         let cachedCost: Double = Double(cached) * provider.chatCachedInputRate
         let outputCost: Double = Double(billedOutput) * provider.chatOutputRate
         return inputCost + cachedCost + outputCost
+    }
+
+    // MARK: - トークン内訳の取り出し (想定外の値でコストとログが壊れないようクランプ)
+
+    static func promptTokens(_ usage: [String: Any]) -> Int {
+        max(usage["prompt_tokens"] as? Int ?? 0, 0)
+    }
+
+    /// キャッシュヒット数。負数・`prompt_tokens` 超過という想定外の値は丸める。
+    static func cachedTokens(_ usage: [String: Any]) -> Int {
+        let details = usage["prompt_tokens_details"] as? [String: Any]
+        let raw: Int = details?["cached_tokens"] as? Int ?? 0
+        return min(max(raw, 0), promptTokens(usage))
+    }
+
+    static func completionTokens(_ usage: [String: Any]) -> Int {
+        max(usage["completion_tokens"] as? Int ?? 0, 0)
+    }
+
+    static func reasoningTokens(_ usage: [String: Any]) -> Int {
+        let details = usage["completion_tokens_details"] as? [String: Any]
+        return max(details?["reasoning_tokens"] as? Int ?? 0, 0)
+    }
+
+    /// `cost_in_usd_ticks` に入っている**実請求額** (USD)。無ければ nil。
+    /// 0 は「無料」と「値の欠損」を区別できないため権威扱いせず nil を返し、
+    /// 呼び出し側をトークン単価計算にフォールバックさせる。
+    static func billedCostUSD(_ usage: [String: Any]) -> Double? {
+        if let ticks = usage["cost_in_usd_ticks"] as? Double, ticks > 0 {
+            return ticks / usdTicksPerDollar
+        }
+        if let ticks = usage["cost_in_usd_ticks"] as? Int, ticks > 0 {
+            return Double(ticks) / usdTicksPerDollar
+        }
+        return nil
+    }
+
+    // MARK: - usage 内訳ログ
+
+    /// レスポンス JSON から `usage` オブジェクトだけを取り出す。
+    static func usageObject(from data: Data) -> [String: Any]? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return obj["usage"] as? [String: Any]
+    }
+
+    /// usage 内訳のログ1行を組み立てる純関数。
+    ///
+    /// **出力に発話本文・プロンプト・APIキーが混ざってはならない**ため、
+    /// 出力する値は「整数として取り出したトークン数」「プロバイダー定義のモデル名」
+    /// 「ホワイトリスト済みの effort」「検証済みラベル」だけに限定している。
+    /// usage に未知のキー (本文が入り込んだフィールド等) があっても素通りしない。
+    /// - Parameter effort: 実際に送った `reasoning_effort`。`nil` は未指定 (= `default` 表記)。
+    static func usageLogLine(
+        usage: [String: Any],
+        provider: AIProvider,
+        label: String,
+        effort: String?
+    ) -> String {
+        let prompt = promptTokens(usage)
+        let cached = cachedTokens(usage)
+        let completion = completionTokens(usage)
+        let reasoning = reasoningTokens(usage)
+
+        // 実請求額があればそれ、無ければ単価計算値。どちらを出したかを src= で明示する
+        // (推定値を実測値と誤読すると次のコスト分析がまた推定ベースになるため)。
+        // `usageCost` ではなく `tokenBasedCostUSD` を呼ぶのは、キャッシュヒットログが
+        // 1レスポンスにつき二重に出るのを避けるため (この関数は副作用を持たない)。
+        let billed = billedCostUSD(usage)
+        let cost = billed ?? tokenBasedCostUSD(usage, provider: provider)
+        let source = billed == nil ? "calc" : "ticks"
+
+        return "[usage] label=\(sanitizedUsageLabel(label))"
+            + " model=\(provider.chatModel)"
+            + " effort=\(sanitizedEffort(effort))"
+            + " prompt=\(prompt) cached=\(cached)"
+            + " completion=\(completion) reasoning=\(reasoning)"
+            + " cost=\(String(format: "%.8f", cost)) src=\(source)"
+    }
+
+    /// usage ログに出しうる用途ラベル。ここに載っていない文字列はログに書かない。
+    static let knownUsageLabels: Set<String> = [
+        "chat",             // 用途指定なしの呼び出し (既定)
+        "cleaner-single",   // TranscriptCleaner.clean
+        "cleaner-batch",    // TranscriptCleaner.cleanBatch (`-件数` が付く)
+        "catchup",          // CopilotController.runCatchup
+        "overview",         // CopilotController.updateOverviewIfNeeded
+        "title"             // MeetingTitleGenerator.generate
+    ]
+
+    /// ログに出して安全なラベルか検証する。
+    ///
+    /// ラベルは呼び出し側が渡す固定文字列だけを想定しているが、万一プロンプトや
+    /// 発話本文・APIキーが渡された場合にログへ流出させないよう、**既知ラベルの
+    /// ホワイトリストに完全一致しないものは丸ごと捨てる**。
+    /// 「使える文字だけ残す」方式にしないのは、部分的な除去では本文が読める形で
+    /// 残ってしまう (空白を削るだけでは文が読める・`sk-proj-…` は素通りする) ため。
+    /// 唯一の例外はバッチ件数のサフィックス (`cleaner-batch-8` のような ASCII数字5桁以内)。
+    static func sanitizedUsageLabel(_ label: String) -> String {
+        if knownUsageLabels.contains(label) { return label }
+        if let separator = label.lastIndex(of: "-") {
+            let base = String(label[label.startIndex..<separator])
+            let suffix = label[label.index(after: separator)...]
+            if knownUsageLabels.contains(base),
+               !suffix.isEmpty,
+               suffix.count <= 5,
+               suffix.allSatisfy({ $0.isASCII && $0.isNumber }) {
+                return label
+            }
+        }
+        return "invalid-label"
+    }
+
+    /// ログに出す effort 表記。`ReasoningEffortPolicy` のホワイトリスト外は出さない。
+    static func sanitizedEffort(_ effort: String?) -> String {
+        guard let effort else { return "default" }
+        return ReasoningEffortPolicy.allowed.contains(effort) ? effort : "unknown"
     }
 }

@@ -68,6 +68,54 @@ final class CopilotControllerTests: XCTestCase {
         let text = CopilotController.transcriptText(entries)
         XCTAssertEqual(text, "[自分] こんにちは\n[相手] hi")
     }
+
+    // MARK: - 全体像の自動更新トリガー閾値
+
+    /// 2026-08-10 の実測 (61分の英語講義で総額 $0.8197、うち Overview が40%超) を受けて
+    /// 緩めた値。ここを戻すと Overview のLLM呼び出しが倍に増えるため、数値ごと固定する。
+    func test_overviewTriggerThresholds_matchCostMeasurement() {
+        XCTAssertEqual(CopilotController.monitorInterval, 60)
+        XCTAssertEqual(CopilotController.updateCharThreshold, 5_000)
+        XCTAssertEqual(CopilotController.updateTimeThreshold, 300)
+        XCTAssertEqual(CopilotController.minCharsForTimeUpdate, 400)
+        // 初回表示の速さ (体感) に直結する値なので、コスト削減の対象にしない
+        XCTAssertEqual(CopilotController.minCharsForFirstOverview, 300)
+    }
+
+    /// 時間トリガーは監視周期より長くないと「毎周期発火」になり閾値が意味を失う。
+    func test_timeThreshold_isLongerThanMonitorInterval() {
+        XCTAssertGreaterThan(
+            CopilotController.updateTimeThreshold,
+            CopilotController.monitorInterval
+        )
+    }
+
+    /// **LLM に渡す窓は発火間隔より広くなければならない。**
+    /// 窓 (`overviewContextChars`) が新規発話量 (`updateCharThreshold`) を下回ると、
+    /// 更新の合間に流れた発話が一度も全体像に反映されないまま窓の外へ出てしまう。
+    /// 閾値を 2,400→5,000 に緩めた時点で余裕が 2.5倍→1.2倍まで縮んでいたため 8,000 に広げた。
+    func test_overviewContextWindow_isWiderThanCharThreshold() {
+        XCTAssertGreaterThan(
+            CopilotController.overviewContextChars,
+            CopilotController.updateCharThreshold
+        )
+        // 取りこぼしの実害を避けるため 1.5倍以上の余裕を要求する
+        XCTAssertGreaterThanOrEqual(
+            Double(CopilotController.overviewContextChars),
+            Double(CopilotController.updateCharThreshold) * 1.5
+        )
+        XCTAssertEqual(CopilotController.overviewContextChars, 8_000)
+    }
+
+    /// 初回の全体像が出るまでは従来の30秒周期を維持する
+    /// (60秒にすると「傍聴中…」が最大60秒残って体感が悪い。初回は1会議1回でコストに響かない)。
+    func test_firstOverviewMonitorInterval_isFasterThanSteadyState() {
+        XCTAssertEqual(CopilotController.firstOverviewMonitorInterval, 30)
+        XCTAssertLessThan(
+            CopilotController.firstOverviewMonitorInterval,
+            CopilotController.monitorInterval
+        )
+    }
 }
 
 final class MeetingOverviewTests: XCTestCase {

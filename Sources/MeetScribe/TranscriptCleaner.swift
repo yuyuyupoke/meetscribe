@@ -50,7 +50,8 @@ enum TranscriptCleaner {
             provider: provider,
             timeout: 15,
             forceJSON: true,
-            cacheKey: PromptCacheKey.cleanerSingle
+            cacheKey: PromptCacheKey.cleanerSingle,
+            usageLabel: "cleaner-single"
         )
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }
@@ -126,7 +127,10 @@ enum TranscriptCleaner {
             provider: provider,
             timeout: 20,
             forceJSON: true,
-            cacheKey: PromptCacheKey.cleanerBatch
+            cacheKey: PromptCacheKey.cleanerBatch,
+            // バッチ件数までログに残す。1回あたりの単価だけでは「何件を1回に
+            // まとめられているか」が分からず、バッチ化の効き具合を測れないため。
+            usageLabel: "cleaner-batch-\(items.count)"
         )
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }

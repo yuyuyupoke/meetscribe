@@ -121,6 +121,83 @@ enum AIProvider: String, CaseIterable, Codable, Identifiable, Sendable {
         case .xAI: return true
         }
     }
+
+    /// `reasoning_effort` を受け付けるか。
+    /// grok-4.3 は推論モデルで `none`/`low`/`high` を取る。gpt-4.1-mini は非推論モデルで
+    /// このパラメータを持たないため、送るとリクエストが弾かれる。
+    var supportsReasoningEffort: Bool {
+        switch self {
+        case .openAI: return false
+        case .xAI: return true
+        }
+    }
+}
+
+/// チャット呼び出しの `reasoning_effort` を決めるポリシー。
+///
+/// **既定は `none`（推論トークンを出さない）**。2026-08-10 にテキサスの英語講義の
+/// 実データで A/B した結果、整形・対訳・要約のいずれも推論なしが最良だった:
+/// - コスト: Cleaner 1バッチ $0.0043 → $0.0023 (**-47%**)、Overview 1回 $0.0040 → $0.0023 (**-42%**)
+/// - 整形品質: 英語講義の音声には `um`/`uh` がほぼ無く (xAI STT が書き起こし時点で落とす)
+///   整形の仕事が元々少ない。推論を効かせると逆に "In my history" → "In my experience"、
+///   "introduction" → "introductory" のような**原文の書き換え**が出た。`none` は全件原文維持
+/// - 全体像品質: 推論ありは直近6,000字に引っ張られて purpose を上書きしてしまうが、
+///   `none` は前回の purpose を正しく継承し agenda を累積した
+///
+/// 注意: 2026-07-25 の調査では**日本語会議**でフィラー除去が機能しなくなる劣化を実測している
+/// (「めっちゃいいですねめっちゃいいですね」の重複が残る等)。日本語主体の会議で整形が
+/// 物足りない場合は従来動作に戻せる:
+/// - GUI (Finder/Dock) 起動でも効く恒久設定:
+///   `defaults write com.meetscribe.app reasoningEffort default`
+/// - その場限りの切り替え (ターミナルから起動する場合のみ):
+///   `MEETSCRIBE_REASONING_EFFORT=default open -a MeetScribe` ではなく
+///   `MEETSCRIBE_REASONING_EFFORT=default /Applications/MeetScribe.app/Contents/MacOS/MeetScribe`
+enum ReasoningEffortPolicy {
+    static let environmentKey = "MEETSCRIBE_REASONING_EFFORT"
+
+    /// GUI 起動時のロールバック手段。**環境変数だけでは不十分**なため併設している:
+    /// Finder/Dock/`open` から起動したアプリはシェルの環境を継承しないので、
+    /// `MEETSCRIBE_REASONING_EFFORT` は普段の使い方では届かない。
+    static let userDefaultsKey = "reasoningEffort"
+
+    /// 環境変数も UserDefaults も無いときに使う値。
+    static let defaultEffort = "none"
+
+    /// xAI が受け付ける値 + 「送らない」を意味する `default`。
+    /// 未知の文字列で API に弾かれると整形・要約が丸ごと失敗するため、
+    /// ホワイトリスト外は無視する。
+    static let allowed: Set<String> = ["none", "low", "high", "default"]
+
+    /// 実際に送る値。`nil` は「パラメータを付けない」(= プロバイダー既定の推論量)。
+    ///
+    /// 優先順位は 環境変数 → UserDefaults → 既定値。環境変数を上に置くのは、
+    /// 恒久設定 (UserDefaults) を書き換えずに1回だけ挙動を確かめられるようにするため。
+    /// ホワイトリスト外・空文字は「指定なし」と見なして次の候補へ落ちる。
+    static func resolve(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        defaults: UserDefaults? = .standard
+    ) -> String? {
+        let candidate = normalized(environment[environmentKey])
+            ?? normalized(defaults?.string(forKey: userDefaultsKey))
+            ?? defaultEffort
+        return candidate == "default" ? nil : candidate
+    }
+
+    /// 入力を正規化し、ホワイトリストに載っている値だけを返す (それ以外は nil)。
+    private static func normalized(_ raw: String?) -> String? {
+        guard let value = raw?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !value.isEmpty,
+            allowed.contains(value)
+        else {
+            return nil
+        }
+        return value
+    }
+
+    /// プロセス起動時に一度だけ解決した値。
+    static let current: String? = resolve()
 }
 
 /// プロンプトキャッシュのヒット率を上げるための、用途ごとに安定したキー。
