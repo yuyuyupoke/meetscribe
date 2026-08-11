@@ -116,6 +116,129 @@ final class CopilotControllerTests: XCTestCase {
             CopilotController.monitorInterval
         )
     }
+
+    // MARK: - 発火判定の振る舞い (OverviewUpdateTrigger)
+    //
+    // 閾値の定数ミラーだけでは「呼び出し側が状態を前進させ忘れている」欠陥を
+    // 一切捕まえられない (2026-08-11 監査 C3: パース失敗時に状態を据え置くと
+    // 監視周期ごとに再試行し続け、61分で7回のはずが約60回になる)。
+    // ここでは監視ループを模した発火回数そのものを固定する。
+
+    /// 監視ループを模して「何周期目に発火したか」を返す。
+    /// - Parameters:
+    ///   - charsPerTick: 1周期あたりに増える文字起こしの文字数
+    ///   - parseSucceeds: 応答のパースが成功するか
+    ///   - advanceOnFailure: 失敗時にも状態を前進させるか (false = C3 修正前の挙動)
+    ///   - startsWithOverview: 初回の全体像がすでに出ている状態から始めるか
+    private func simulateOverviewFires(
+        tickInterval: TimeInterval,
+        ticks: Int,
+        charsPerTick: Int,
+        parseSucceeds: Bool,
+        advanceOnFailure: Bool = true,
+        startsWithOverview: Bool
+    ) -> [Int] {
+        var trigger = OverviewUpdateTrigger()
+        var hasOverview = startsWithOverview
+        var textLength = 0
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        var fires: [Int] = []
+
+        for tick in 0..<ticks {
+            now = now.addingTimeInterval(tickInterval)
+            textLength += charsPerTick
+            guard trigger.shouldUpdate(
+                textLength: textLength,
+                hasOverview: hasOverview,
+                now: now
+            ) else { continue }
+            fires.append(tick)
+            if parseSucceeds {
+                hasOverview = true
+                trigger.recordAttempt(textLength: textLength, now: now)
+            } else if advanceOnFailure {
+                trigger.recordAttempt(textLength: textLength, now: now)
+            }
+        }
+        return fires
+    }
+
+    /// **パースが失敗し続けても発火回数は成功時のカデンスと同じ。**
+    /// 61分 (60秒周期) / 発話 300字/分 という実測レンジで、失敗ループが
+    /// 監視周期ごとの再試行に化けないことを固定する。
+    func test_overviewTrigger_repeatedFailures_keepSuccessCadence() {
+        let onSuccess = simulateOverviewFires(
+            tickInterval: 60, ticks: 61, charsPerTick: 300,
+            parseSucceeds: true, startsWithOverview: true
+        )
+        let onFailure = simulateOverviewFires(
+            tickInterval: 60, ticks: 61, charsPerTick: 300,
+            parseSucceeds: false, startsWithOverview: true
+        )
+        let beforeC3Fix = simulateOverviewFires(
+            tickInterval: 60, ticks: 61, charsPerTick: 300,
+            parseSucceeds: false, advanceOnFailure: false, startsWithOverview: true
+        )
+
+        XCTAssertEqual(onFailure, onSuccess, "失敗時の発火は成功時と同じカデンスでなければならない")
+        // 61分講義での実測は約7回。カデンスの上限を余裕込みで固定する
+        XCTAssertLessThanOrEqual(onFailure.count, 14, "発火が多すぎる: \(onFailure)")
+        // 修正前の挙動 (状態を据え置く) は毎周期発火に化ける
+        XCTAssertGreaterThan(beforeC3Fix.count, onFailure.count * 3, "回帰ガードが効いていない")
+    }
+
+    /// 初回の全体像が出る前の失敗も有界。かつ**初回試行のタイミングは変えない**
+    /// (「傍聴中…」の解消が遅くなると体感が悪い)。
+    func test_overviewTrigger_firstOverviewFailures_areBoundedWithoutDelayingFirstTry() {
+        let fixed = simulateOverviewFires(
+            tickInterval: 30, ticks: 122, charsPerTick: 150,
+            parseSucceeds: false, startsWithOverview: false
+        )
+        let beforeC3Fix = simulateOverviewFires(
+            tickInterval: 30, ticks: 122, charsPerTick: 150,
+            parseSucceeds: false, advanceOnFailure: false, startsWithOverview: false
+        )
+
+        XCTAssertEqual(fixed.first, beforeC3Fix.first, "初回試行のタイミングを遅らせてはいけない")
+        // 速い再試行は maxFastFirstAttempts 回まで。その後は通常カデンスに落ちる
+        XCTAssertLessThanOrEqual(fixed.count, 20, "初回失敗ループが発散している: \(fixed.count)")
+        XCTAssertGreaterThan(beforeC3Fix.count, 100, "修正前は毎周期発火していたはず")
+    }
+
+    /// 初回は最低文字数だけで発火する (体感優先の速い初回表示)。
+    func test_overviewTrigger_firstFire_atMinCharsForFirstOverview() {
+        let trigger = OverviewUpdateTrigger()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertFalse(trigger.shouldUpdate(
+            textLength: CopilotController.minCharsForFirstOverview - 1,
+            hasOverview: false, now: now
+        ))
+        XCTAssertTrue(trigger.shouldUpdate(
+            textLength: CopilotController.minCharsForFirstOverview,
+            hasOverview: false, now: now
+        ))
+    }
+
+    /// 試行を記録したら直後の周期では発火せず、文字数/経過時間の各トリガーで復帰する。
+    func test_overviewTrigger_recordAttempt_suppressesImmediateRefire() {
+        var trigger = OverviewUpdateTrigger()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(trigger.shouldUpdate(textLength: 1_000, hasOverview: false, now: t0))
+        trigger.recordAttempt(textLength: 1_000, now: t0)
+
+        // 60秒後・新規100字 → どちらのトリガーも満たさない
+        XCTAssertFalse(trigger.shouldUpdate(
+            textLength: 1_100, hasOverview: true, now: t0.addingTimeInterval(60)
+        ))
+        // 5分経過 & 新規400字 → 時間トリガー
+        XCTAssertTrue(trigger.shouldUpdate(
+            textLength: 1_400, hasOverview: true, now: t0.addingTimeInterval(300)
+        ))
+        // 新規5,000字 → 経過時間に関係なく文字数トリガー
+        XCTAssertTrue(trigger.shouldUpdate(
+            textLength: 6_000, hasOverview: true, now: t0.addingTimeInterval(10)
+        ))
+    }
 }
 
 final class MeetingOverviewTests: XCTestCase {
