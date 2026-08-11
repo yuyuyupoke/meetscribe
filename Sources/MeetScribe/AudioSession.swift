@@ -234,6 +234,19 @@ final class AudioSession {
         }
         DebugLog.log("[MeetScribe] AudioSession.stop() - with save")
         AppState.shared.captureStatus = .stopping
+        // 保存フロー (実測1〜14秒) が終わるまで .stopping を維持する。
+        // ここで先に .idle へ戻すと、保存中にヘッダーの録音ボタンやメニューバー
+        // (`AppDelegate.toggleRecording` は `canStart` 判定) から次の録音を開始できてしまい:
+        //   1. start() の TranscriptStore.clear() で直前の会議の文字起こしが消える
+        //      (`meetingEntries` は isFinal を見ないので partial 1個で長時間の会議が数語に化ける)
+        //   2. 旧セッションの保存フロー末尾の `meetingStartedAt = nil` が新セッションの
+        //      開始時刻を潰し、次の stop() が `guard let startedAt` で落ちて
+        //      「empty transcript → skip save」の嘘ログを出して2件目も丸ごと捨てる
+        // `.stopping` は computeCanStart で開始不可・startBlockReason は「停止処理中です」・
+        // HeaderView は ProgressView と既に配線済みなので、状態を維持するだけで塞げる。
+        // 早期 return / 保存成功 / 保存失敗のどの経路でも必ず .idle に戻すため defer で落とす
+        // (戻し忘れると録音が二度と開始できなくなる)。
+        defer { AppState.shared.captureStatus = .idle }
 
         let startedAt = AppState.shared.meetingStartedAt
         let endedAt = Date()
@@ -253,7 +266,6 @@ final class AudioSession {
         tearDown()
         AppState.shared.micLevel = 0.0
         AppState.shared.systemLevel = 0.0
-        AppState.shared.captureStatus = .idle
 
         // 発話が無ければ保存しない
         let meetingEntries = TranscriptStore.shared.meetingEntries
