@@ -533,8 +533,15 @@ final class AudioSession {
                 isRunning: AppState.shared.isRunning
             )
             guard stalled else {
-                // tap が戻った → 次の事故に備えて再起動枠を戻し、自分のバナーだけ消す。
-                if micRestartCount > 0 {
+                // 「途絶していない」だけでは復帰ではない。engine 再起動の直後 (成功でも
+                // 失敗でも) は監視起点が進むだけで、まだ1バッファも届いていない。
+                // ここで枠を戻すと (a) 失敗バナーを1秒後に自分で消してしまい、
+                // (b) 再起動上限に永久に到達しない。復帰の合図は実バッファ到達だけ。
+                if MicrophoneTapWatchdog.shouldResetRestartBudget(
+                    restartCount: micRestartCount,
+                    hasTapArrivedSinceStart: microphone.hasTapArrivedSinceStart
+                ) {
+                    DebugLog.log("[MeetScribe] mic tap recovered → restart budget reset")
                     micRestartCount = 0
                     clearMicStallErrorIfMine()
                 }
@@ -549,6 +556,10 @@ final class AudioSession {
                 AppState.shared.lastError =
                     "\(Self.micStallErrorPrefix) 音声が届いていません。入力デバイスの接続を確認してください "
                     + "(再起動を\(micRestartCount)回試みました)。"
+                // 途絶時のレベルで VU メーターが凍ったままだと「録れている」と誤解される。
+                // さらに SilenceDetector は max(micLevel, systemLevel) を見るので、
+                // 凍った値が閾値超えだと 10分無音の自動停止 + 保存まで妨げてしまう。
+                AppState.shared.micLevel = 0
                 return
             }
             micRestartCount += 1
@@ -592,6 +603,10 @@ final class AudioSession {
             )
             AppState.shared.lastError =
                 "\(Self.micStallErrorPrefix) マイクを再起動できませんでした: \(error.localizedDescription)"
+            // 失敗中もレベルは凍ったままなので 0 に落とす (上の give-up と同じ理由)。
+            // このバナーは次の tick で消えない (復帰の合図は実バッファ到達だけ) ので、
+            // 閾値経過で再試行が続き、上限に達すれば give-up バナーが残る。
+            AppState.shared.micLevel = 0
         }
     }
 

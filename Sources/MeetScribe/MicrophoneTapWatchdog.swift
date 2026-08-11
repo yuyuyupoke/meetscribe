@@ -34,8 +34,10 @@ enum MicrophoneTapWatchdog {
     /// tap が途絶したか (= engine を再起動すべきか) の判定。
     ///
     /// - Parameters:
-    ///   - secondsSinceLastTap: 最後に tap がバッファを渡してからの経過秒。
-    ///     `nil` (未開始 / 停止中 / 再起動中) は「判断材料なし」として発火しない。
+    ///   - secondsSinceLastTap: 監視起点 (engine 起動 / 起動失敗 / 最後の tap) からの経過秒。
+    ///     `nil` (未開始 / 停止中) は「判断材料なし」として発火しない。**engine の起動が
+    ///     失敗した場合は nil ではなく「失敗時刻からの経過秒」が来る** (`MicrophoneTapClock`)。
+    ///     nil で固定されると監視が永久に黙るため。
     ///   - isMuted: マイクの Scribe ミュート状態。ミュートは tap より下流で
     ///     フレームを捨てるだけなので本来 tap は届き続けるが、上流の記録位置が
     ///     将来ずれても誤発火しないよう明示的に弾く (ミュート中の再起動は
@@ -49,5 +51,30 @@ enum MicrophoneTapWatchdog {
     ) -> Bool {
         guard isRunning, !isMuted, let elapsed = secondsSinceLastTap else { return false }
         return elapsed >= threshold
+    }
+
+    /// 再起動枠 (`maxRestartAttempts` のカウンタ) を 0 に戻し、マイク監視が立てた
+    /// 警告バナーを消してよいかの判定。
+    ///
+    /// 潰した事故 (2026-08-11 監査実装のレビュー): 「途絶していない」だけを復帰の
+    /// 合図にしていたため、次の2つが起きていた。
+    ///   * **再起動失敗の直後**: 起点が進んだ直後は閾値未満なので「復帰」と誤読し、
+    ///     1秒前に出した `[マイク] マイクを再起動できませんでした` を消していた。
+    ///     ユーザーには異常が一切見えないまま講義の残りが無音で終わる。
+    ///   * **engine は running だが tap が来ない**: 再起動ごとに起点が進むので
+    ///     毎回カウンタが 0 に戻り、`maxRestartAttempts` の打ち切りと
+    ///     give-up バナーに構造的に到達できなかった (5秒周期の無限再起動)。
+    ///
+    /// なので復帰の合図は「**実バッファが届いた**」だけにする。
+    ///
+    /// - Parameters:
+    ///   - restartCount: 現在の再起動回数 (0 なら戻すものが無い)。
+    ///   - hasTapArrivedSinceStart: 直近の engine 起動 (または起動失敗) 以降に
+    ///     実バッファが届いたか。
+    static func shouldResetRestartBudget(
+        restartCount: Int,
+        hasTapArrivedSinceStart: Bool
+    ) -> Bool {
+        restartCount > 0 && hasTapArrivedSinceStart
     }
 }
