@@ -94,6 +94,93 @@ final class TranscriptCleanerTests: XCTestCase {
         let result = TranscriptCleaner.parseBatchResult(#"{"items": []}"#)
         XCTAssertEqual(result?.count, 0)
     }
+
+    // MARK: - diagnosticShape (パース失敗の診断)
+    //
+    // 目的は「なぜ size=1 のバッチ応答が 5〜17% パースできないのか」を確定させること。
+    // **本文を1文字も漏らさない**ことが前提条件なので、そこを重点的に固定する。
+
+    func test_diagnosticShape_singularItemsObject_isIdentifiable() {
+        // 有力候補その1: items が配列でなく単数のオブジェクトで返る
+        let shape = TranscriptCleaner.diagnosticShape(of: #"{"items": {"id": "a", "cleaned": "text"}}"#)
+        XCTAssertTrue(shape.contains("top-level=object(1)"), shape)
+        XCTAssertTrue(shape.contains("items=object(2)"), shape)
+        XCTAssertTrue(shape.contains("cleaned=string(4 chars)"), shape)
+    }
+
+    func test_diagnosticShape_renamedKey_isIdentifiable() {
+        // 有力候補その2: キー名が変わる
+        let shape = TranscriptCleaner.diagnosticShape(of: #"{"segments": [{"id": "a"}]}"#)
+        XCTAssertTrue(shape.contains("segments=array(1)"), shape)
+    }
+
+    func test_diagnosticShape_flatArray_isIdentifiable() {
+        let shape = TranscriptCleaner.diagnosticShape(of: #"[{"id": "a", "cleaned": "text"}]"#)
+        XCTAssertTrue(shape.contains("top-level=array(1) of object(2)"), shape)
+    }
+
+    func test_diagnosticShape_unparsable_reportsBytesOnly() {
+        let shape = TranscriptCleaner.diagnosticShape(of: "Sorry, I cannot help with that")
+        XCTAssertTrue(shape.hasPrefix("top-level=unparsable"), shape)
+        XCTAssertFalse(shape.contains("Sorry"), shape)
+        XCTAssertTrue(shape.contains("bytes"), shape)
+    }
+
+    func test_diagnosticShape_manyKeys_isBounded() {
+        var obj: [String: Any] = [:]
+        for i in 0..<20 { obj["k\(i)"] = i }
+        let data = try! JSONSerialization.data(withJSONObject: obj)
+        let shape = TranscriptCleaner.diagnosticShape(of: String(decoding: data, as: UTF8.self))
+
+        XCTAssertTrue(
+            shape.contains("+\(20 - TranscriptCleaner.maxDiagnosticKeys) more"),
+            shape
+        )
+        XCTAssertLessThan(shape.count, 400, "診断ログが長すぎる: \(shape)")
+    }
+
+    /// **本文の流出ゼロ。** キー名・ネスト・配列・トップレベル文字列など、
+    /// モデルが本文をどこに入れて返しても値が出ないことを固定する
+    /// (ログは平文で長期間残るため、値の出力は議事録の意図しない二重保存になる)。
+    func test_diagnosticShape_neverLeaksTranscriptContent() {
+        let japanese = "本日の会議では新製品の価格を1200円に決定しました"
+        let english = "we decided the price today"
+        let payloads = [
+            #"{"items": [{"id": "a", "cleaned": "\#(japanese)"}]}"#,
+            #"{"\#(japanese)": 1}"#,
+            #"{"\#(english)": {"cleaned": "\#(japanese)"}}"#,
+            #"["\#(japanese)", "\#(english)"]"#,
+            #"{"items": {"deep": {"deeper": {"cleaned": "\#(japanese)"}}}}"#,
+            #""\#(japanese)""#,
+            japanese
+        ]
+
+        for payload in payloads {
+            let shape = TranscriptCleaner.diagnosticShape(of: payload)
+            XCTAssertFalse(shape.contains(japanese), "本文が漏れた: \(shape)")
+            XCTAssertFalse(shape.contains(english), "本文が漏れた: \(shape)")
+            // 断片も出さない
+            XCTAssertFalse(shape.contains("価格"), "本文の断片が漏れた: \(shape)")
+            XCTAssertFalse(shape.contains("decided"), "本文の断片が漏れた: \(shape)")
+            XCTAssertFalse(shape.contains("1200"), "本文の断片が漏れた: \(shape)")
+        }
+    }
+
+    func test_sanitizedKey_keepsIdentifiersRedactsEverythingElse() {
+        // スキーマのキー名 (これが分かれば原因が特定できる)
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey("items"), "items")
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey("translation_ja"), "translation_ja")
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey("item-1.id"), "item-1.id")
+        // 本文になり得るもの: 日本語・空白入り・長すぎる・空
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey("えー、今日は"), "<redacted:6 chars>")
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey("two words"), "<redacted:9 chars>")
+        XCTAssertEqual(
+            TranscriptCleaner.sanitizedKey(String(repeating: "a", count: 25)),
+            "<redacted:25 chars>"
+        )
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey(""), "<redacted:0 chars>")
+        XCTAssertEqual(TranscriptCleaner.sanitizedKey("Hello, world!"), "<redacted:13 chars>")
+    }
 }
 
 final class OpenAIChatClientTests: XCTestCase {

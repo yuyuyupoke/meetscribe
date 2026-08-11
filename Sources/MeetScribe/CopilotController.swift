@@ -53,8 +53,9 @@ final class CopilotController {
     /// 実行中の Catchup。セッション終了/再開時に cancel し、旧セッションの
     /// 遅延応答が新セッションのカードリストや実行中フラグを汚さないようにする。
     private var catchupTask: Task<Void, Never>?
-    private var lastOverviewTextLength = 0
-    private var lastOverviewUpdateAt = Date.distantPast
+    /// 全体像の発火判定に使う状態。判定ロジックは純粋な値型 (`OverviewUpdateTrigger`)
+    /// に切り出してあり、テストが監視ループを実際に回さずに検証できる。
+    private var overviewTrigger = OverviewUpdateTrigger()
     private var activeProvider: AIProvider?
     private var activeAPIKey: String?
 
@@ -68,8 +69,7 @@ final class CopilotController {
         AppState.shared.overview = nil
         AppState.shared.isCatchupRunning = false
         AppState.shared.isOverviewUpdating = false
-        lastOverviewTextLength = 0
-        lastOverviewUpdateAt = Date.distantPast
+        overviewTrigger = OverviewUpdateTrigger()
         activeProvider = provider
         activeAPIKey = apiKey
 
@@ -209,18 +209,11 @@ final class CopilotController {
         guard !AppState.shared.isOverviewUpdating else { return }
 
         let fullText = TranscriptStore.shared.meetingTranscriptText
-        let newChars = fullText.count - lastOverviewTextLength
-        let elapsed = Date().timeIntervalSince(lastOverviewUpdateAt)
-
-        let firstRun = (AppState.shared.overview == nil)
-        let shouldUpdate: Bool
-        if firstRun {
-            shouldUpdate = fullText.count >= Self.minCharsForFirstOverview
-        } else {
-            shouldUpdate = newChars >= Self.updateCharThreshold
-                || (elapsed >= Self.updateTimeThreshold && newChars >= Self.minCharsForTimeUpdate)
-        }
-        guard shouldUpdate else { return }
+        guard overviewTrigger.shouldUpdate(
+            textLength: fullText.count,
+            hasOverview: AppState.shared.overview != nil,
+            now: Date()
+        ) else { return }
         guard let provider = activeProvider,
               let apiKey = activeAPIKey,
               !apiKey.isEmpty else { return }
@@ -257,11 +250,16 @@ final class CopilotController {
         )
         if costUSD > 0 { AppState.shared.addCost(costUSD) }
 
+        // **成功でも失敗でも状態を前進させる。** 失敗時に据え置くと `newChars` が
+        // 閾値に張り付いたまま監視周期ごとに再試行し続け、課金が発散する
+        // (2026-08-11 の監査 C3: 61分で7回のはずの全体像が約60回になり得る)。
+        // 前進させる文字数はLLM呼び出し**前**に測った長さを使う (呼び出し中に
+        // 流れた発話を「反映済み」にしてしまわないため)。
+        overviewTrigger.recordAttempt(textLength: fullText.count, now: Date())
+
         // 失敗時は前の内容を維持 (チラつき・消失させない)
         if let text, let parsed = MeetingOverview.parse(text) {
             AppState.shared.overview = parsed
-            lastOverviewTextLength = fullText.count
-            lastOverviewUpdateAt = Date()
         } else {
             DebugLog.log("[copilot] overview update failed (keeping previous)")
         }
@@ -290,5 +288,58 @@ final class CopilotController {
     /// LLM に渡す転写テキスト (話者ラベル付き)。
     static func transcriptText(_ entries: [TranscriptEntry]) -> String {
         entries.map { "[\($0.speaker.displayName)] \($0.text)" }.joined(separator: "\n")
+    }
+}
+
+/// 全体像 (Overview) 自動更新の発火判定と状態前進だけを持つ値型。
+///
+/// `CopilotController` から切り出してあるのは、**発火回数が課金そのもの**なのに
+/// 監視ループを実際に回さないと検証できない形だったため (閾値の定数ミラーだけでは
+/// 呼び出し側を書き換えても全通してしまう)。ここに切り出すことで
+/// 「失敗が連続しても発火回数が増え続けない」不変条件をテストで直接固定できる。
+///
+/// 状態は「前回**試行**時」を指す。成功時だけでなく失敗時も前進させるのが要点:
+/// 据え置くと `newChars` が閾値に張り付き、監視周期ごとに再試行し続ける
+/// (2026-08-11 監査 C3)。閾値は `CopilotController` の static 定数を唯一の出典とし、
+/// MainActor 隔離を合わせるためこの型も `@MainActor` にしている。
+@MainActor
+struct OverviewUpdateTrigger: Equatable {
+    /// 前回試行時の文字起こし全文の長さ。
+    private(set) var lastTextLength = 0
+    /// 前回試行の時刻。
+    private(set) var lastAttemptAt = Date.distantPast
+    /// これまでの試行回数 (成功・失敗の別を問わない)。
+    private(set) var attempts = 0
+
+    /// 初回の全体像が出るまでに「速い周期」での試行を許す回数。
+    ///
+    /// 初回判定は `overview == nil` の間ずっと真になる条件 (全文長のみ) なので、
+    /// パースが失敗し続けると 30秒ごとに永久に再試行してしまう
+    /// (失敗時に状態を前進させても、初回条件が状態を見ないので効かない)。
+    /// 一時的な失敗からは速く復帰したいので即座には諦めず、この回数を超えたら
+    /// 通常のカデンス (文字数 / 経過時間) に落として発散を止める。
+    static let maxFastFirstAttempts = 3
+
+    /// 発火すべきか。判定は副作用なし。
+    /// - Parameters:
+    ///   - textLength: 文字起こし全文の現在の長さ
+    ///   - hasOverview: すでに全体像が表示されているか (= 初回生成が成功済みか)
+    func shouldUpdate(textLength: Int, hasOverview: Bool, now: Date) -> Bool {
+        // 初回だけは最低文字数のみで速く出す (体感優先)。ただし有限回まで。
+        if !hasOverview && attempts < Self.maxFastFirstAttempts {
+            return textLength >= CopilotController.minCharsForFirstOverview
+        }
+        let newChars = textLength - lastTextLength
+        let elapsed = now.timeIntervalSince(lastAttemptAt)
+        return newChars >= CopilotController.updateCharThreshold
+            || (elapsed >= CopilotController.updateTimeThreshold
+                && newChars >= CopilotController.minCharsForTimeUpdate)
+    }
+
+    /// LLM 呼び出しを1回行ったことを記録する。**成功・失敗どちらでも呼ぶ。**
+    mutating func recordAttempt(textLength: Int, now: Date) {
+        lastTextLength = textLength
+        lastAttemptAt = now
+        attempts += 1
     }
 }

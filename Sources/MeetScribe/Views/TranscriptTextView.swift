@@ -189,22 +189,21 @@ struct TranscriptTextView: NSViewRepresentable {
             switch op {
             case let .keep(_, newIndex):
                 // 内容不変。textStorage には触れず、カーソルだけ進める。
-                let length = renderChunk(
+                // 長さしか要らないので attributed string は作らない (renderedLength)。
+                let length = renderedLength(
                     entry: new[newIndex],
                     showTranslations: newShowTranslations,
-                    isLast: newIndex == new.count - 1,
-                    uiScale: uiScale
-                ).length
+                    isLast: newIndex == new.count - 1
+                )
                 cursor += length
                 oldCursor += length
 
             case let .update(oldIndex, newIndex):
-                let oldLength = renderChunk(
+                let oldLength = renderedLength(
                     entry: old[oldIndex],
                     showTranslations: oldShowTranslations,
-                    isLast: oldIndex == old.count - 1,
-                    uiScale: uiScale
-                ).length
+                    isLast: oldIndex == old.count - 1
+                )
                 let newChunk = renderChunk(
                     entry: new[newIndex],
                     showTranslations: newShowTranslations,
@@ -220,12 +219,11 @@ struct TranscriptTextView: NSViewRepresentable {
                 oldCursor += oldLength
 
             case let .delete(oldIndex):
-                let oldLength = renderChunk(
+                let oldLength = renderedLength(
                     entry: old[oldIndex],
                     showTranslations: oldShowTranslations,
-                    isLast: oldIndex == old.count - 1,
-                    uiScale: uiScale
-                ).length
+                    isLast: oldIndex == old.count - 1
+                )
                 textStorage.deleteCharacters(in: NSRange(location: cursor, length: oldLength))
                 edits.append(TranscriptTextDiff.TextEdit(
                     oldRange: NSRange(location: oldCursor, length: oldLength),
@@ -405,6 +403,34 @@ struct TranscriptTextView: NSViewRepresentable {
             result.append(NSAttributedString(string: "\n", attributes: bodyAttrs))
         }
         return result
+    }
+
+    /// `renderChunk` が返す attributed string の**長さだけ**を、実際に生成せずに求める。
+    ///
+    /// 差分適用 (`applyDiff`) の `.keep` / `.update` / `.delete` はカーソルを進めるために
+    /// 長さしか要らないのに、以前はフォント生成と属性辞書の構築を伴うフルレンダリングを
+    /// して `.length` だけ読んでいた。エントリ数に対して O(N²) になり、実測190分の
+    /// セッションで1更新あたり 1.5〜4ms をメインスレッドで捨てていた。
+    ///
+    /// **`renderChunk` と1単位でもずれると textStorage の座標がずれて表示が壊れる**ため、
+    /// 全組合せ (話者 × 対訳有無 × isLast) での等価性を `TranscriptTextDiffTests` で固定している。
+    /// 内訳は `"[" + ラベル + "] "` = ラベル長 + 3 / 本文 / 対訳は改行1 + `"└ "`2 + 訳文 /
+    /// 末尾でなければ改行1。長さは NSAttributedString と同じ UTF-16 単位で数える
+    /// (ラベルは話者ごとに長さが違う: 「自分」「相手」は2、「Claude」は6)。
+    static func renderedLength(
+        entry: TranscriptEntry,
+        showTranslations: Bool,
+        isLast: Bool
+    ) -> Int {
+        var length = entry.speaker.displayName.utf16.count + 3  // "[" + ラベル + "] "
+        length += entry.text.utf16.count
+        if showTranslations, let translation = entry.translation, !translation.isEmpty {
+            length += 3 + translation.utf16.count  // "\n" + "└ " + 訳文
+        }
+        if !isLast {
+            length += 1  // エントリ区切りの "\n"
+        }
+        return length
     }
 
     /// 話者カラー解決。`me` のみ青、それ以外（`other` 含む将来追加分）は緑。

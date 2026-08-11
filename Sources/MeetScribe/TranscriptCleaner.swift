@@ -146,6 +146,9 @@ enum TranscriptCleaner {
         guard let data = content.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rawItems = obj["items"] as? [[String: Any]] else {
+            // 課金済みの応答を丸ごと捨てている経路。原因が未確定なので推測で
+            // フォールバックは書かず、まず**形だけ**を残して確定させる (下記参照)。
+            DebugLog.log("[cleaner] batch parse failed: \(diagnosticShape(of: content))")
             return nil
         }
         var results: [(itemId: String, result: Result)] = []
@@ -167,5 +170,86 @@ enum TranscriptCleaner {
             ))
         }
         return results
+    }
+
+    // MARK: - パース失敗の診断
+    //
+    // 2026-08-11 の監査で、size=1 のバッチ応答が実測 5.2〜17.3% パースできておらず、
+    // 課金済みの応答を丸ごと捨てていることが分かった。影響は金額 ($0.003〜0.010/講義)
+    // より品質側で、1講義あたり約22セグメント (9.3%) の日本語対訳が欠落している。
+    //
+    // **フォールバックは書かない。** トークン算術 (失敗群の completion 残差) が
+    // 「フラット形で返っている」仮説を 4.6〜7.4σ で否定しており、有力候補は
+    // `{"items": {...}}` の単数崩れ or キー名の変化。推測でパッチを当てると
+    // 「直したのに何も変わらない」になるので、まず形を観測して確定させる。
+    //
+    // **本文は絶対に出さない。** ログは平文で長期間残り、値を出せば議事録の
+    // 意図しない二重保存になる (2026-07-25 に修正済みの事故)。出すのは
+    // 「トップレベルの種別 / キー名 / 値の型 / 要素数・文字数」だけ。
+
+    /// 診断ログに載せるキーの最大数 (壊れた応答が巨大でもログを溢れさせない)。
+    static let maxDiagnosticKeys = 8
+    /// 原文のまま出してよいキー名の最大長。
+    static let maxDiagnosticKeyLength = 24
+
+    /// パースできなかった応答の**形**を1行で表す (値は一切含めない)。
+    static func diagnosticShape(of content: String) -> String {
+        let byteCount = content.utf8.count
+        guard let data = content.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) else {
+            return "top-level=unparsable (\(byteCount) bytes)"
+        }
+        return "top-level=\(shapeDescription(root)) (\(byteCount) bytes)"
+    }
+
+    /// JSON 値の形。文字列は長さだけ、配列・辞書は要素数と (浅い範囲で) 中身の形。
+    private static func shapeDescription(_ value: Any, depth: Int = 0) -> String {
+        switch value {
+        case is NSNull:
+            return "null"
+        case let string as String:
+            return "string(\(string.count) chars)"
+        case let array as [Any]:
+            // 先頭要素の形だけ見る (フラット配列で返ってきた場合の判別に効く)。
+            guard depth < 1, let first = array.first else { return "array(\(array.count))" }
+            return "array(\(array.count)) of \(shapeDescription(first, depth: depth + 1))"
+        case let dict as [String: Any]:
+            return "object(\(dict.count))\(keyShapes(dict, depth: depth))"
+        case is NSNumber:
+            return "number"
+        default:
+            return "unknown"
+        }
+    }
+
+    /// 辞書のキー名と値の型の一覧 (深さと件数で有界)。
+    private static func keyShapes(_ dict: [String: Any], depth: Int) -> String {
+        guard depth < 2 else { return "" }
+        let keys = dict.keys.sorted()
+        let shown = keys.prefix(maxDiagnosticKeys)
+        let parts = shown.map { key in
+            "\(sanitizedKey(key))=\(shapeDescription(dict[key] ?? NSNull(), depth: depth + 1))"
+        }
+        let more = keys.count > shown.count ? ", +\(keys.count - shown.count) more" : ""
+        return " [\(parts.joined(separator: ", "))\(more)]"
+    }
+
+    /// キー名をログに出してよい形に落とす。
+    ///
+    /// 知りたいのはスキーマのキー名 (`items` / `cleaned` / `translation_ja` …) であって
+    /// 発話本文ではない。モデルが本文をキーにして返す可能性があるので、
+    /// **識別子の形 (ASCII 英数と `_ - .` のみ、24文字以内) に完全一致するものだけ**
+    /// 原文で出し、それ以外は文字数だけの `<redacted:N chars>` にする。
+    /// 実際の発話は空白・日本語・句読点を含むので必ず redacted 側に落ちる。
+    static func sanitizedKey(_ key: String) -> String {
+        let isIdentifierLike = !key.isEmpty
+            && key.count <= maxDiagnosticKeyLength
+            && key.unicodeScalars.allSatisfy { scalar in
+                (scalar.value >= 0x61 && scalar.value <= 0x7A)      // a-z
+                    || (scalar.value >= 0x41 && scalar.value <= 0x5A) // A-Z
+                    || (scalar.value >= 0x30 && scalar.value <= 0x39) // 0-9
+                    || scalar == "_" || scalar == "-" || scalar == "."
+            }
+        return isIdentifierLike ? key : "<redacted:\(key.count) chars>"
     }
 }
