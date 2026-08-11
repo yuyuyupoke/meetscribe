@@ -68,6 +68,8 @@ final class AudioSession {
     private var micPipeline: TranscriptionPipeline?
     private var sysPipeline: TranscriptionPipeline?
     private var silenceDetector: SilenceDetector?
+    /// 最大録音時間のキャップ (停止忘れによる課金発散の歯止め)。
+    private var sessionLimiter: SessionLengthLimiter?
 
     /// クライアント側ノイズフィルタ。環境音・機械音を OpenAI に送る前に除去する。
     private let micPreProcessor = AudioPreProcessor(config: .microphone, label: "mic-pre")
@@ -211,7 +213,8 @@ final class AudioSession {
         }
 
         // 会議開始時刻をマーク + Copilot (全体像の自動更新) 開始 + 無音検知タイマー起動 (10分)
-        AppState.shared.meetingStartedAt = Date()
+        let meetingStartedAt = Date()
+        AppState.shared.meetingStartedAt = meetingStartedAt
         CopilotController.shared.startSession(provider: provider, apiKey: apiKey)
         let detector = SilenceDetector(timeoutMinutes: 10.0) { [weak self] in
             DebugLog.log("[MeetScribe] silence timeout → auto-stop")
@@ -221,6 +224,8 @@ final class AudioSession {
         silenceDetector = detector
         // マイク tap の途絶監視を開始 (AVAudioEngine の無警告死の検知)。
         startMicrophoneWatchdog()
+        // 停止忘れの歯止め: 最大録音時間で自動停止 + 保存する。
+        startSessionLimiter(from: meetingStartedAt)
 
         AppState.shared.captureStatus = .running
     }
@@ -424,6 +429,10 @@ final class AudioSession {
         micWatchdogTask = nil
         micCaptureRestartTask = nil
         micRestartCount = 0
+        // 最大録音時間の Timer も全停止経路 (stop / kill / shutdownSync / start失敗) が
+        // 通る tearDown で必ず無効化する (残すと停止後・次セッションで誤発火する)。
+        sessionLimiter?.stop()
+        sessionLimiter = nil
         micClient?.disconnect()
         sysClient?.disconnect()
         micClient = nil
@@ -469,6 +478,29 @@ final class AudioSession {
                 pipeline.process(.sample(gated))
             }
         }
+    }
+
+    // MARK: - 最大録音時間のキャップ
+
+    /// 自動停止の通知に使う接頭辞 (次の start() で lastError はクリアされる)。
+    private static let sessionCapNoticePrefix = "[自動停止]"
+
+    /// 会議開始からキャップ到達までを監視し、到達したら停止 + 保存する。
+    /// 無言で止まると「壊れた」と誤解されるため、必ず理由をバナーに残す。
+    private func startSessionLimiter(from startedAt: Date) {
+        let capSeconds = SessionLengthLimitPolicy.resolveSeconds()
+        let capMinutes = Int((capSeconds / 60).rounded())
+        DebugLog.log("[MeetScribe] session length cap = \(capMinutes)min")
+        let limiter = SessionLengthLimiter(limitSeconds: capSeconds) { [weak self] in
+            // ユーザー操作や他経路の停止と重なっていたら黙って退く (stop 側が畳み済み)。
+            guard AppState.shared.isRunning else { return }
+            DebugLog.log("[MeetScribe] session cap \(capMinutes)min reached → stop & save")
+            AppState.shared.lastError =
+                "\(Self.sessionCapNoticePrefix) 最大録音時間 (\(capMinutes)分) に達したため、録音を終了して議事録を保存します。"
+            Task { await self?.stop() }
+        }
+        limiter.start(from: startedAt)
+        sessionLimiter = limiter
     }
 
     // MARK: - マイク tap 途絶の監視 (AVAudioEngine の無警告死)
@@ -726,30 +758,65 @@ final class AudioSession {
         }
 
         AppState.shared.reconnectingStreams.remove(speaker)
-        setReconnectError("\(Self.reconnectErrorPrefix) [\(speaker.displayName)] 再接続を諦めました。録音は継続しますが、文字起こしは止まります。")
+        setReconnectError(
+            "\(Self.reconnectErrorPrefix) [\(speaker.displayName)] \(Self.reconnectGiveUpMarker)。"
+            + "録音は継続しますが、文字起こしは止まります。"
+        )
         DebugLog.log("[MeetScribe] reconnect gave up for \(speaker.rawValue)")
     }
 
+    /// 「そのストリームの文字起こしが死んだ」ことを示す文言。片方が死んだ手掛かりは
+    /// もう片方の進捗・成功で消してはいけないため、判定用の識別子として使う
+    /// (消すと、オンライン会議で相手の発言ゼロのまま議事録が保存され原因も残らない)。
+    static let reconnectGiveUpMarker = "再接続を諦めました"
+
+    static func isStreamDeadWarning(_ message: String) -> Bool {
+        message.contains(reconnectGiveUpMarker)
+    }
+
+    /// バナーを上書きしていいかの判定 (純関数)。
+    /// ストリーム死亡の警告は、他ストリームの「再接続中…」等では潰さない。
+    /// 別ストリームも死んだ場合 (= 次も死亡警告) だけ上書きを許す。
+    static func shouldOverwriteError(current: String?, next: String) -> Bool {
+        guard let current, isStreamDeadWarning(current) else { return true }
+        return isStreamDeadWarning(next)
+    }
+
+    /// 再接続成功時にバナーを消していいかの判定 (純関数)。
+    /// - ストリーム死亡の警告は消さない
+    /// - `[再接続]` メッセージは**自分のストリーム宛のものだけ**消す
+    ///   (他ストリームの「再接続中…」を消すと復帰前の手掛かりが失われる)
+    /// - 該当ストリームの通信系エラー (受信エラー / APIエラー) は再接続成功で解消済み
+    static func shouldClearReconnectError(current: String, speaker: SpeakerLabel?) -> Bool {
+        if isStreamDeadWarning(current) { return false }
+        if current.hasPrefix(reconnectErrorPrefix) {
+            guard let speaker else { return true }
+            return current.hasPrefix("\(reconnectErrorPrefix) [\(speaker.displayName)]")
+        }
+        if let speaker {
+            return current.hasPrefix("[\(speaker.displayName)] 受信エラー:")
+                || current.hasPrefix("[\(speaker.displayName)] APIエラー:")
+        }
+        return false
+    }
+
     /// 再接続関連のエラーメッセージだけを更新する (他種のエラーを上書きしない方針を保ちつつ、
-    /// 再接続中の最新状況は反映する)。
+    /// 再接続中の最新状況は反映する)。ストリーム死亡の警告は上書きしない。
     private func setReconnectError(_ message: String) {
+        guard Self.shouldOverwriteError(current: AppState.shared.lastError, next: message) else {
+            DebugLog.log("[MeetScribe] kept stream-dead warning (banner update skipped)")
+            return
+        }
         AppState.shared.lastError = message
     }
 
     /// 再接続成功時の lastError クリア。自分が立てた `[再接続]` 接頭辞のメッセージに加え、
     /// speaker 指定時は該当ストリームの通信系エラー (受信エラー / APIエラー) も消す
     /// — 再接続に成功した時点でそれらは解消済みであり、残すと赤字が出続ける。
-    /// 他ストリームや他種のエラーは維持する。
+    /// 他ストリームや他種のエラー、ストリーム死亡の警告は維持する。
     private func clearReconnectErrorIfMine(speaker: SpeakerLabel? = nil) {
-        guard let lastError = AppState.shared.lastError else { return }
-        if lastError.hasPrefix(Self.reconnectErrorPrefix) {
-            AppState.shared.lastError = nil
-            return
-        }
-        if let speaker,
-           lastError.hasPrefix("[\(speaker.displayName)] 受信エラー:")
-            || lastError.hasPrefix("[\(speaker.displayName)] APIエラー:") {
-            AppState.shared.lastError = nil
-        }
+        guard let lastError = AppState.shared.lastError,
+              Self.shouldClearReconnectError(current: lastError, speaker: speaker) else { return }
+        AppState.shared.lastError = nil
     }
 }

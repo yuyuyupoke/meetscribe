@@ -38,9 +38,9 @@ enum TranscriptionClientError: Error, LocalizedError {
 
 /// OpenAI / xAI Streaming STTクライアント。ストリーム1本に対して1インスタンス。
 ///
-/// `@unchecked Sendable`: urlSession/webSocket は main actor / audio thread /
-/// URLSession delegate queue から触られる。可変状態は必要最小限に絞り、
-/// 接続状態と continuation はロックで保護する。
+/// `@unchecked Sendable`: トランスポート (urlSession/webSocket) は main actor /
+/// audio thread / URLSession delegate queue から触られる。可変状態は必要最小限に
+/// 絞り、**トランスポートも含めて** 接続状態と continuation を `stateLock` で保護する。
 final class TranscriptionClient: NSObject, @unchecked Sendable {
     private let apiKey: String
     private let speaker: SpeakerLabel
@@ -71,8 +71,14 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     /// 小声の発話を取りこぼさないことを優先する。
     private static let voicePeakThreshold: Int16 = 500
 
-    private var urlSession: URLSession?
-    private var webSocket: URLSessionWebSocketTask?
+    /// トランスポート。**`stateLock` 配下で保持する。**
+    /// main actor / audio スレッド / URLSession delegate queue の3系統から触られるため、
+    /// `@unchecked Sendable` の自己申告に実態を合わせる (この2つだけがロック外に
+    /// 残っており、`disconnect()` だけ他3経路と解放順序が逆だった)。
+    /// 参照は必ず `currentSocket()` / `setTransport()` / `takeTransport()` 経由。
+    /// **NSLock は非再帰なので、ロック保持中にこれらを呼んではいけない** (下記参照)。
+    private var _urlSession: URLSession?
+    private var _webSocket: URLSessionWebSocketTask?
 
     // 接続状態 + 接続完了 continuation を一括でロック保護
     private let stateLock = NSLock()
@@ -160,8 +166,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
             delegateQueue: nil
         )
         let ws = session.webSocketTask(with: request)
-        self.urlSession = session
-        self.webSocket = ws
+        setTransport(session: session, socket: ws)
         ws.resume()
         receiveLoop()
 
@@ -173,6 +178,11 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(10))
+                // continuation はキャンセルに応答しないので、throw する前に必ず失敗で
+                // 解放する。これが無いと TaskGroup が continuation を待ち続けて
+                // タイムアウトが発火せず、captureStatus が `.starting` のまま永久固着し
+                // アプリ再起動しか復帰手段が無くなる (`finish()` の :220 と同型)。
+                self.resumeConnectionContinuation(with: .failure(TranscriptionClientError.connectionTimeout))
                 throw TranscriptionClientError.connectionTimeout
             }
             try await group.next()
@@ -242,11 +252,14 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
         flushXAICost()
         resumeFinishContinuation()
 
-        webSocket?.cancel(with: .goingAway, reason: nil)
-        webSocket = nil
-        urlSession?.invalidateAndCancel()
-        urlSession = nil
+        // 順序: 先に接続フラグを倒し、その後でソケットを手放す。
+        // 逆順 (旧実装) だと audio スレッドが `guard isConnected` (sendAudio) を
+        // 通った直後にソケットが消える窓が開き、他3経路 (heartbeat / xAI無音
+        // タイムアウト / recoverable APIエラー) と順序が逆になる。
         setConnected(false)
+        let transport = takeTransport()
+        transport.socket?.cancel(with: .goingAway, reason: nil)
+        transport.session?.invalidateAndCancel()
         resumeConnectionContinuation(with: .failure(TranscriptionClientError.sessionNotEstablished))
     }
 
@@ -274,7 +287,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                     // 先に fireUnexpectedCloseIfNeeded(quiet:false) を奪うレースを防ぐ
                     self.markSelfInitiatedCancel()
                     self.fireUnexpectedCloseIfNeeded()
-                    self.webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                    self.currentSocket()?.cancel(with: .abnormalClosure, reason: nil)
                     return
                 }
             }
@@ -285,7 +298,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
 
     /// `sendPing` を非同期にラップ。`heartbeatTimeout` 以内に pong が返らなければ false。
     private func sendPingWithTimeout() async -> Bool {
-        guard let ws = webSocket else { return false }
+        guard let ws = currentSocket() else { return false }
         return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             let lock = NSLock()
             var resumed = false
@@ -346,6 +359,34 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     private func setConnected(_ value: Bool) {
         stateLock.lock(); defer { stateLock.unlock() }
         _isConnected = value
+    }
+
+    /// 送信・受信・cancel から使う現在のソケット。
+    /// **ロック保持中から呼ばないこと** (NSLock は非再帰 = デッドロックする。
+    /// `handleXAIPartial` のコメントも参照)。
+    /// 現在の呼び出し元はすべて lock-free な地点:
+    /// sendBinary / sendJSON / receiveLoop / sendPingWithTimeout / heartbeat の cancel /
+    /// handleJSON の xAI 無音タイムアウトと recoverable エラー (どれも直前に
+    /// ロックを解放済み)、`commitIfNeeded` は解放後に sendJSON を呼ぶ。
+    private func currentSocket() -> URLSessionWebSocketTask? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return _webSocket
+    }
+
+    private func setTransport(session: URLSession, socket: URLSessionWebSocketTask) {
+        stateLock.lock(); defer { stateLock.unlock() }
+        _urlSession = session
+        _webSocket = socket
+    }
+
+    /// トランスポートを取り出して同時に手放す (二重解放と中途半端な状態を作らない)。
+    private func takeTransport() -> (session: URLSession?, socket: URLSessionWebSocketTask?) {
+        stateLock.lock(); defer { stateLock.unlock() }
+        let session = _urlSession
+        let socket = _webSocket
+        _urlSession = nil
+        _webSocket = nil
+        return (session, socket)
     }
 
     private func setConnectionContinuation(_ cont: CheckedContinuation<Void, Error>) {
@@ -531,7 +572,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     }
 
     private func sendBinary(_ data: Data) {
-        guard let ws = webSocket else { return }
+        guard let ws = currentSocket() else { return }
         let speaker = self.speaker
         ws.send(.data(data)) { error in
             if let error {
@@ -568,7 +609,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     }
 
     private func sendJSON(_ dict: [String: Any]) {
-        guard let ws = webSocket else { return }
+        guard let ws = currentSocket() else { return }
         do {
             let data = try JSONSerialization.data(withJSONObject: dict)
             guard let text = String(data: data, encoding: .utf8) else { return }
@@ -586,7 +627,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     // MARK: - 受信
 
     private func receiveLoop() {
-        guard let ws = webSocket else { return }
+        guard let ws = currentSocket() else { return }
         ws.receive { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -772,7 +813,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 // quiet=false で fire を奪い「再接続中…」バナーが出るレースを防ぐ
                 markSelfInitiatedCancel()
                 fireUnexpectedCloseIfNeeded(quiet: true)
-                webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                currentSocket()?.cancel(with: .abnormalClosure, reason: nil)
                 break
             }
             let recoverable = ErrorMessageHumanizer.isRecoverableAPIErrorType(errType)
@@ -790,7 +831,7 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
                 setConnected(false)
                 markSelfInitiatedCancel()
                 fireUnexpectedCloseIfNeeded()
-                webSocket?.cancel(with: .abnormalClosure, reason: nil)
+                currentSocket()?.cancel(with: .abnormalClosure, reason: nil)
             }
 
         default:
