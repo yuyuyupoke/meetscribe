@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-このリポジトリは **MeetScribe** — macOS 向けのリアルタイム会議文字起こし & Q&A アプリ
+このリポジトリは **MeetScribe** — macOS 向けのリアルタイム会議文字起こし & Copilot アプリ
 （Swift / SwiftUI）です。
 
 ## ユーザーからセットアップを依頼されたら
@@ -20,7 +20,8 @@
 
 - **BlackHole 等の仮想オーディオデバイスは不要**。システム音声は ScreenCaptureKit で
   直接取得します。オーディオルーティングの設定は案内しないでください。
-- 動作要件: macOS 14+ / OpenAIまたはxAI APIキー / `claude` CLI（タイトル生成用、任意）。
+- 動作要件: macOS 14+ / OpenAI または xAI の APIキー。外部CLIへの依存はありません
+  （議事録タイトルも会議で使用中のプロバイダーで生成します）。
 
 ## 開発時
 

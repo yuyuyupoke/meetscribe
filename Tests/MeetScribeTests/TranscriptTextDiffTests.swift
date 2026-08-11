@@ -272,6 +272,121 @@ final class TranscriptTextDiffTests: XCTestCase {
         XCTAssertEqual(chunk.string, "[自分] Hi")
     }
 
+    // MARK: - renderedLength: renderChunk との等価性 (描画ファストパス)
+    //
+    // applyDiff は .keep/.update/.delete でカーソルを進めるために「長さ」しか必要としない。
+    // 1単位でもずれると textStorage の座標がずれて表示が壊れるので、全組合せで固定する。
+
+    func test_renderedLength_matchesRenderChunkLength_allCombinations() {
+        let speakers: [SpeakerLabel] = [.me, .other, .user, .claude]
+        let texts = ["", "Hi", "日本語の本文です", "surrogate 𝔘𝔫𝔦𝔠𝔬𝔡𝔢 🎉"]
+        let translations: [String?] = [nil, "", "こんにちは", "絵文字入り 🇯🇵🎉"]
+
+        for speaker in speakers {
+            for text in texts {
+                for translation in translations {
+                    for showTranslations in [true, false] {
+                        for isLast in [true, false] {
+                            let target = entry(
+                                "a", text: text, translation: translation, speaker: speaker
+                            )
+                            let rendered = TranscriptTextView.renderChunk(
+                                entry: target,
+                                showTranslations: showTranslations,
+                                isLast: isLast
+                            )
+                            XCTAssertEqual(
+                                TranscriptTextView.renderedLength(
+                                    entry: target,
+                                    showTranslations: showTranslations,
+                                    isLast: isLast
+                                ),
+                                rendered.length,
+                                """
+                                speaker=\(speaker.rawValue) textLen=\(text.utf16.count) \
+                                translationLen=\(translation?.utf16.count ?? -1) \
+                                showTranslations=\(showTranslations) isLast=\(isLast)
+                                """
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// ラベル長は話者ごとに違う (「自分」= 2 UTF-16単位 / 「Claude」= 6)。
+    /// 5固定などで書くとこのテストが落ちる。
+    func test_renderedLength_labelLengthDependsOnSpeaker() {
+        let mine = TranscriptTextView.renderedLength(
+            entry: entry("a", text: "x", speaker: .me), showTranslations: true, isLast: true
+        )
+        let claude = TranscriptTextView.renderedLength(
+            entry: entry("a", text: "x", speaker: .claude), showTranslations: true, isLast: true
+        )
+        XCTAssertEqual(
+            claude - mine,
+            SpeakerLabel.claude.displayName.utf16.count - SpeakerLabel.me.displayName.utf16.count
+        )
+        XCTAssertNotEqual(claude, mine)
+    }
+
+    func test_applyDiff_withTranslationsAndMixedSpeakers_matchesFullRebuild() {
+        let old = [
+            entry("a", text: "Hello", translation: "こんにちは"),
+            entry("b", text: "World", speaker: .other),
+            entry("c", text: "tail", speaker: .claude)
+        ]
+        let new = [
+            entry("a", text: "Hello", translation: "こんにちは"),   // keep (対訳あり)
+            entry("b", text: "World", speaker: .other),            // keep
+            entry("c", text: "tail!", speaker: .claude),           // update
+            entry("d", text: "added", translation: "追加", speaker: .user)  // insert
+        ]
+
+        let ops = TranscriptTextDiff.diffOps(
+            old: old, new: new, oldShowTranslations: true, newShowTranslations: true
+        )!
+        let storage = NSTextStorage(attributedString: TranscriptTextView.buildAttributed(
+            entries: old, showTranslations: true
+        ))
+        _ = TranscriptTextView.applyDiff(
+            ops, old: old, new: new,
+            oldShowTranslations: true, newShowTranslations: true,
+            textStorage: storage
+        )
+
+        let expected = TranscriptTextView.buildAttributed(entries: new, showTranslations: true)
+        XCTAssertEqual(storage.string, expected.string)
+    }
+
+    func test_applyDiff_deleteEntryWithTranslation_matchesFullRebuild() {
+        let old = [
+            entry("a", text: "Hello", translation: "こんにちは"),
+            entry("b", text: "Bye", translation: "さようなら", speaker: .other),
+            entry("c", text: "tail")
+        ]
+        let new = [
+            entry("a", text: "Hello", translation: "こんにちは"),
+            entry("c", text: "tail")
+        ]
+
+        let ops = TranscriptTextDiff.diffOps(
+            old: old, new: new, oldShowTranslations: true, newShowTranslations: true
+        )!
+        let storage = NSTextStorage(attributedString: TranscriptTextView.buildAttributed(
+            entries: old, showTranslations: true
+        ))
+        _ = TranscriptTextView.applyDiff(
+            ops, old: old, new: new,
+            oldShowTranslations: true, newShowTranslations: true,
+            textStorage: storage
+        )
+
+        let expected = TranscriptTextView.buildAttributed(entries: new, showTranslations: true)
+        XCTAssertEqual(storage.string, expected.string)
+    }
+
     // MARK: - applyDiff: textStorage への実適用結果の検証
 
     func test_applyDiff_appendEntry_resultMatchesFullRebuild() {
