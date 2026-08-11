@@ -27,6 +27,33 @@ final class MicrophoneCapture: @unchecked Sendable {
     private var tapCount = 0
     private(set) var isRunning = false
 
+    /// tap が最後にバッファを渡した時刻 (`systemUptime`)。停止中・未開始は nil。
+    /// tap はキャプチャスレッドから、読み出しは MainActor の watchdog から来るので
+    /// NSLock + var で保護する (`OSAllocatedUnfairLock` に**関数型を入れると**
+    /// withLock ごとに reabstraction thunk が連鎖して stop 時にスタック
+    /// オーバーフローする既知事故があるため、ここでも値型のみを扱う)。
+    /// `systemUptime` はスリープ中進まないので、スリープ復帰直後に途絶と誤判定しない。
+    private let tapClockLock = NSLock()
+    private var _lastTapUptime: TimeInterval?
+
+    /// 最後に tap がバッファを渡してからの経過秒。停止中・未開始は nil。
+    /// `MicrophoneTapWatchdog` が engine の無警告死を検知するための唯一の入力。
+    var secondsSinceLastTap: TimeInterval? {
+        tapClockLock.lock(); defer { tapClockLock.unlock() }
+        guard let last = _lastTapUptime else { return nil }
+        return max(0, ProcessInfo.processInfo.systemUptime - last)
+    }
+
+    private func markTapArrived(at uptime: TimeInterval) {
+        tapClockLock.lock(); defer { tapClockLock.unlock() }
+        _lastTapUptime = uptime
+    }
+
+    private func clearTapClock() {
+        tapClockLock.lock(); defer { tapClockLock.unlock() }
+        _lastTapUptime = nil
+    }
+
     func start(onBuffer: BufferHandler? = nil) throws {
         // 既に動いている場合は一旦止めてから開始する。早期 return すると新しい
         // bufferHandler への差し替えがスキップされ、切断済みの旧パイプラインに
@@ -74,6 +101,9 @@ final class MicrophoneCapture: @unchecked Sendable {
         engine.prepare()
         try engine.start()
         DebugLog.log("[mic] engine started: running=\(engine.isRunning)")
+        // 監視の起点を engine 起動時刻にする。1バッファも届かないケース
+        // (権限や入力デバイス消失) も閾値経過で検知させるため。
+        markTapArrived(at: ProcessInfo.processInfo.systemUptime)
         isRunning = true
     }
 
@@ -88,6 +118,8 @@ final class MicrophoneCapture: @unchecked Sendable {
         try? engine.inputNode.setVoiceProcessingEnabled(false)
         bufferHandler = nil
         isRunning = false
+        // 停止中は「途絶」ではないので監視の材料を消す (再起動中の誤発火防止)。
+        clearTapClock()
         // micLevel のリセットは呼び出し側 (AudioSession, @MainActor) で行う。
         // ここで Task を撒くと、アプリ終了経路でスケジュール前にプロセスが消える。
     }
@@ -119,8 +151,12 @@ final class MicrophoneCapture: @unchecked Sendable {
     private var lastLevelUpdate: TimeInterval = 0
 
     private func processBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
-        // VU メーター用 level 更新は 100ms ごとに throttle (UI 描画負荷削減)
         let now = ProcessInfo.processInfo.systemUptime
+        // tap 到達の記録は**ミュート判定 (AudioSession 側のハンドラ) とノイズゲートより
+        // 前**で行う。下流で記録すると「ミュート中」「無音の講義室」を engine の死と
+        // 誤診して再起動を繰り返し、音声を刻む。
+        markTapArrived(at: now)
+        // VU メーター用 level 更新は 100ms ごとに throttle (UI 描画負荷削減)
         if now - lastLevelUpdate >= 0.1 {
             lastLevelUpdate = now
             let level = AudioLevelMeter.normalizedLevel(from: buffer)

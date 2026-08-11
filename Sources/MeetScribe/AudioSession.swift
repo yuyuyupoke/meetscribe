@@ -80,6 +80,17 @@ final class AudioSession {
     /// SCStream 復帰中の Task。多重復帰を防ぐため 1 本だけ保持。
     private var sysCaptureRestartTask: Task<Void, Never>?
 
+    /// マイク tap 途絶の監視 Task。録音中のみ生存させ、停止時に必ず cancel する
+    /// (Task を残すと停止後に誤発火して engine を起こし直す)。
+    private var micWatchdogTask: Task<Void, Never>?
+
+    /// マイク engine 再起動中の Task。多重再起動を防ぐため 1 本だけ保持
+    /// (`sysCaptureRestartTask` と同じガード方式)。
+    private var micCaptureRestartTask: Task<Void, Never>?
+
+    /// 現セッションで実行したマイク engine 再起動の回数。tap が戻ったら 0 に戻す。
+    private var micRestartCount = 0
+
     /// 現セッションの文字起こし言語。start() 時の設定値を固定し、録音中に
     /// 設定を変えても再接続ストリームだけ言語が変わる不整合を防ぐ
     /// (UI の「次回の録音開始から適用」との一貫性)。
@@ -182,17 +193,7 @@ final class AudioSession {
         }
 
         do {
-            try microphone.start { [micPipeline, preProcessor = micPreProcessor] buffer, _ in
-                // ミュート中 (Scribe に聴かせないボタン) はフレームを破棄。
-                // キャプチャと VU メーターは生かしたまま送信だけ止める。
-                guard !StreamMuteState.shared.isMuted(.me) else { return }
-                // ノイズゲート/スペクトル解析を通過したフレームだけ送信パイプラインへ渡す。
-                // VU メーター用レベルは MicrophoneCapture 側で既に生バッファから計測済みなので、
-                // ここでのゲーティングは表示には影響しない。
-                preProcessor.processAndForward(buffer, sampleRate: buffer.format.sampleRate) { gated in
-                    micPipeline.process(.pcm(gated))
-                }
-            }
+            try microphone.start(onBuffer: makeMicrophoneHandler(pipeline: micPipeline))
         } catch {
             AppState.shared.lastError = "マイク起動失敗: \(error.localizedDescription)"
             AppState.shared.captureStatus = .error(error.localizedDescription)
@@ -218,6 +219,8 @@ final class AudioSession {
         }
         detector.start()
         silenceDetector = detector
+        // マイク tap の途絶監視を開始 (AVAudioEngine の無警告死の検知)。
+        startMicrophoneWatchdog()
 
         AppState.shared.captureStatus = .running
     }
@@ -412,9 +415,15 @@ final class AudioSession {
         micReconnectTask?.cancel()
         sysReconnectTask?.cancel()
         sysCaptureRestartTask?.cancel()
+        // 監視/再起動 Task を残すと停止後や次セッションで誤発火するので必ず畳む。
+        micWatchdogTask?.cancel()
+        micCaptureRestartTask?.cancel()
         micReconnectTask = nil
         sysReconnectTask = nil
         sysCaptureRestartTask = nil
+        micWatchdogTask = nil
+        micCaptureRestartTask = nil
+        micRestartCount = 0
         micClient?.disconnect()
         sysClient?.disconnect()
         micClient = nil
@@ -427,6 +436,24 @@ final class AudioSession {
         AppState.shared.reconnectingStreams = []
         // ミュートを次の会議へ持ち越すと片側が黙って文字起こしされない事故になる
         AppState.shared.mutedStreams = []
+    }
+
+    /// マイクキャプチャのバッファハンドラ。start() と tap 途絶からの engine 再起動の
+    /// 両方から使うため一本化する (復帰パスだけミュートガードが漏れる事故を防ぐ)。
+    private func makeMicrophoneHandler(
+        pipeline: TranscriptionPipeline
+    ) -> MicrophoneCapture.BufferHandler {
+        { [preProcessor = micPreProcessor] buffer, _ in
+            // ミュート中 (Scribe に聴かせないボタン) はフレームを破棄。
+            // キャプチャと VU メーターは生かしたまま送信だけ止める。
+            guard !StreamMuteState.shared.isMuted(.me) else { return }
+            // ノイズゲート/スペクトル解析を通過したフレームだけ送信パイプラインへ渡す。
+            // VU メーター用レベルは MicrophoneCapture 側で既に生バッファから計測済みなので、
+            // ここでのゲーティングは表示には影響しない。
+            preProcessor.processAndForward(buffer, sampleRate: buffer.format.sampleRate) { gated in
+                pipeline.process(.pcm(gated))
+            }
+        }
     }
 
     /// システム音声キャプチャのバッファハンドラ。start() と SCStream 自動復帰の
@@ -442,6 +469,104 @@ final class AudioSession {
                 pipeline.process(.sample(gated))
             }
         }
+    }
+
+    // MARK: - マイク tap 途絶の監視 (AVAudioEngine の無警告死)
+
+    /// マイク監視フローが lastError に書く文言の接頭辞 (成功時に自分のメッセージだけ消すため)。
+    private static let micStallErrorPrefix = "[マイク]"
+
+    /// tap 途絶の監視を開始する。録音中のみ回し、`tearDown()` で必ず cancel する。
+    private func startMicrophoneWatchdog() {
+        micWatchdogTask?.cancel()
+        micRestartCount = 0
+        micWatchdogTask = Task { [weak self] in
+            await self?.runMicrophoneWatchdogLoop()
+        }
+    }
+
+    /// `MicrophoneTapWatchdog.pollIntervalSeconds` ごとに tap の途絶を確認し、
+    /// 途絶していたら engine を再起動する。判定そのものは
+    /// `MicrophoneTapWatchdog.isStalled` (純関数・テスト済み) に委ねる。
+    private func runMicrophoneWatchdogLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(MicrophoneTapWatchdog.pollIntervalSeconds))
+            if Task.isCancelled { return }
+            // 録音中以外 (停止・保存フロー・エラー) では監視しない。
+            guard AppState.shared.isRunning else { return }
+
+            let stalled = MicrophoneTapWatchdog.isStalled(
+                secondsSinceLastTap: microphone.secondsSinceLastTap,
+                isMuted: StreamMuteState.shared.isMuted(.me),
+                isRunning: AppState.shared.isRunning
+            )
+            guard stalled else {
+                // tap が戻った → 次の事故に備えて再起動枠を戻し、自分のバナーだけ消す。
+                if micRestartCount > 0 {
+                    micRestartCount = 0
+                    clearMicStallErrorIfMine()
+                }
+                continue
+            }
+            // 再起動中は次の tick を待つ (多重再起動の防止)。
+            guard micCaptureRestartTask == nil else { continue }
+            guard micRestartCount < MicrophoneTapWatchdog.maxRestartAttempts else {
+                // 入力デバイスそのものが消えている (Bluetooth 切断等) 場合は再起動でも
+                // 戻らない。無限リトライを止め、手掛かりだけ残して監視を終了する。
+                DebugLog.log("[MeetScribe] mic watchdog gave up after \(micRestartCount) restarts")
+                AppState.shared.lastError =
+                    "\(Self.micStallErrorPrefix) 音声が届いていません。入力デバイスの接続を確認してください "
+                    + "(再起動を\(micRestartCount)回試みました)。"
+                return
+            }
+            micRestartCount += 1
+            startMicrophoneRestart(attempt: micRestartCount)
+        }
+    }
+
+    /// engine 再起動を1本だけ走らせる (`sysCaptureRestartTask` と同じ再入ガード)。
+    private func startMicrophoneRestart(attempt: Int) {
+        guard micCaptureRestartTask == nil else { return }
+        micCaptureRestartTask = Task { [weak self] in
+            await self?.runMicrophoneRestart(attempt: attempt)
+            // AudioSession は @MainActor なので Task 本体も MainActor 継承。
+            // ループ完了と同じ同期区間で nil に戻し、次回の途絶に備える。
+            self?.micCaptureRestartTask = nil
+        }
+    }
+
+    /// tap が途絶したマイクを stop → start で作り直す。
+    ///
+    /// `TranscriptionPipeline.converter` のリセットは**不要**: `PCMConverter.convert()`
+    /// は毎フレーム buffer の実フォーマットから `AVAudioConverter` を作り直すので、
+    /// デバイス切替によるフォーマット変更 (ch/sr の変化) は既に透過している。
+    private func runMicrophoneRestart(attempt: Int) async {
+        guard AppState.shared.isRunning, let micPipeline else { return }
+        let stalledFor = microphone.secondsSinceLastTap ?? 0
+        DebugLog.log(
+            "[MeetScribe] mic tap stalled \(String(format: "%.1f", stalledFor))s"
+            + " → restarting engine (attempt \(attempt))"
+        )
+        AppState.shared.lastError =
+            "\(Self.micStallErrorPrefix) 音声が届かなくなりました (入力デバイスの切替?)。マイクを再起動しています…"
+        microphone.stop()
+        do {
+            try microphone.start(onBuffer: makeMicrophoneHandler(pipeline: micPipeline))
+            DebugLog.log("[MeetScribe] mic engine restarted (attempt \(attempt))")
+            // 成功バナーの消去は監視ループ側で行う (実際に tap が戻ったのを確認してから)。
+        } catch {
+            DebugLog.log(
+                "[MeetScribe] mic engine restart failed (attempt \(attempt)): \(error.localizedDescription)"
+            )
+            AppState.shared.lastError =
+                "\(Self.micStallErrorPrefix) マイクを再起動できませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    /// マイク監視が立てたバナーだけを消す (他ストリームや他種のエラーは維持する)。
+    private func clearMicStallErrorIfMine() {
+        guard AppState.shared.lastError?.hasPrefix(Self.micStallErrorPrefix) == true else { return }
+        AppState.shared.lastError = nil
     }
 
     // MARK: - SCStream 自動復帰
