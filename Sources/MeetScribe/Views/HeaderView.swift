@@ -9,28 +9,91 @@ struct HeaderView: View {
     @State private var showKillConfirmation = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            // 左側はドラッグ用の空白
-            Spacer()
-            aiSettingsButton
-            muteButton(
-                speaker: .me,
-                activeIcon: "mic.fill",
-                mutedIcon: "mic.slash.fill"
-            )
-            muteButton(
-                speaker: .other,
-                activeIcon: "speaker.wave.2.fill",
-                mutedIcon: "speaker.slash.fill"
-            )
-            VUMeterView(state: state)
-            reconnectBadge
-            costLabel
-            captureButton
-            killSwitch
+        VStack(spacing: 2) {
+            sessionClockRow
+            HStack(spacing: 10) {
+                // 左側はドラッグ用の空白
+                Spacer()
+                aiSettingsButton
+                muteButton(
+                    speaker: .me,
+                    activeIcon: "mic.fill",
+                    mutedIcon: "mic.slash.fill"
+                )
+                muteButton(
+                    speaker: .other,
+                    activeIcon: "speaker.wave.2.fill",
+                    mutedIcon: "speaker.slash.fill"
+                )
+                VUMeterView(state: state)
+                reconnectBadge
+                costLabel
+                captureButton
+                killSwitch
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
+    }
+
+    /// 録音の開始時刻と経過時間。操作ボタン群の上に1行で置く。
+    ///
+    /// **1秒ごとの更新を `TimelineView` に閉じ込めているのが要点。**
+    /// `AppState` に経過秒を持たせて毎秒書き換えると、`AppState` を参照している
+    /// 全ビュー (文字起こしリストを含む) が毎秒再評価される。文字起こしの描画は
+    /// 1更新あたり数msかかるので、時計のために本文の描画コストを毎秒払うことになる。
+    /// `TimelineView` なら再描画はこのクロージャの中だけに閉じる。
+    private var sessionClockRow: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            if let startedAt = state.meetingStartedAt {
+                clockItem(
+                    icon: "clock",
+                    text: SessionClockFormatter.startTime(startedAt),
+                    help: "この録音を開始した時刻"
+                )
+                // 1秒ごとに再評価されるのはこのクロージャの中だけ
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    clockItem(
+                        icon: "timer",
+                        text: SessionClockFormatter.elapsed(from: startedAt, to: context.date),
+                        help: "録音開始からの経過時間 (MM:SS)"
+                    )
+                }
+            } else {
+                // 待機中も同じ桁数を出してヘッダーの高さと横位置を固定する
+                clockItem(
+                    icon: "clock",
+                    text: SessionClockFormatter.idleStartTime,
+                    help: "録音を開始すると開始時刻が入る",
+                    isIdle: true
+                )
+                clockItem(
+                    icon: "timer",
+                    text: SessionClockFormatter.idleElapsed,
+                    help: "録音を開始すると経過時間が動き出す",
+                    isIdle: true
+                )
+            }
+        }
+    }
+
+    private func clockItem(
+        icon: String,
+        text: String,
+        help: String,
+        isIdle: Bool = false
+    ) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.scaled(9))
+            Text(text)
+                .font(.scaled(10, weight: .regular).monospacedDigit())
+        }
+        .foregroundStyle(isIdle ? Color.secondary.opacity(0.5) : .secondary)
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityValue(text)
     }
 
     /// 現セッションでの選択中AIプロバイダーの累計コスト。0 でも常時表示してユーザーが
