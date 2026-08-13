@@ -16,12 +16,22 @@ final class SessionLengthLimitPolicyTests: XCTestCase {
 
     // MARK: - 既定値
 
-    func test_default_isOneHour() {
+    /// 既定は3時間。60分だった間に**2日連続で講義が切られて議事録が2分割された**
+    /// (2026-08-12 14:32→15:32 で60分到達、2026-08-13 08:58→09:58 も同様)。
+    /// 61分の講義は珍しくなく、実績最長は81分なので180分まで引き上げた。
+    func test_default_isThreeHours() {
         XCTAssertEqual(
             SessionLengthLimitPolicy.resolveSeconds(environment: [:], defaults: makeDefaults()),
-            60 * 60,
-            "既定のキャップは1時間 (オーナー決定)"
+            180 * 60,
+            "既定のキャップは3時間 (60分は実績61分の講義を切ってしまった)"
         )
+    }
+
+    /// キャップは実績の最長セッション (81分) を必ず超えていなければならない。
+    /// ここを下回る値に戻すと、また講義が途中で切られて議事録が分割される。
+    func test_default_exceedsLongestObservedSession() {
+        let longestObservedMinutes: Double = 81  // 2026-07-08
+        XCTAssertGreaterThan(SessionLengthLimitPolicy.defaultMinutes, longestObservedMinutes)
     }
 
     // MARK: - 上書き手段

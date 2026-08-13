@@ -138,9 +138,71 @@ enum OpenAIChatClient {
         }
         let choices = obj["choices"] as? [[String: Any]]
         let message = choices?.first?["message"] as? [String: Any]
-        let content = (message?["content"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // モデルが混ぜる特殊トークンを剥がしてから返す。ここを通せば
+        // cleaner / overview / catchup / title の4経路すべてが同時に守られる。
+        let content = (message?["content"] as? String)
+            .map(sanitizeModelText)
         return (content, cost)
+    }
+
+    // MARK: - モデル応答のサニタイズ
+
+    /// 応答テキストからモデルの特殊トークンを除去する。
+    ///
+    /// **なぜ必要か (2026-08-13 に実APIで再現・原因確定)**
+    /// grok-4.3 は `response_format: json_object` を指定しても、応答の末尾に
+    /// `<|eos|>` を**生テキストとして**吐くことがある:
+    /// ```
+    /// {"items": [{"id": "s1", "cleaned": "...", "translation_ja": "..."}]}<|eos|>
+    /// ```
+    /// JSON本体は完全に閉じているのに `JSONSerialization` が
+    /// `Extra data: line 1 column 282` で落ち、**課金済みの応答を丸ごと捨てていた**。
+    /// 本番ログでは cleaner 呼び出しの 5〜17% がこれで失敗し、対訳が欠落していた。
+    ///
+    /// 誤診しやすい点 (実測で潰した仮説):
+    /// - `finish_reason` は `stop` → truncate ではない
+    /// - 失敗群の `completion_tokens` (58〜180) は成功群 (0〜276) と同じ分布
+    ///   → `max_tokens` 到達でもない
+    /// - 入力の引用符が原因という仮説は再現実験で棄却
+    ///   (引用符ありで成功2/3、引用符なしで失敗2/5)
+    ///
+    /// **入れていない対策とその理由**: 「最初の `{` から最後の `}` を切り出す」等の
+    /// 投機的なJSON抽出は入れない。観測された失敗形はすべて「JSON本体は完全 +
+    /// 末尾に特殊トークン」であり、本文に `}` を含む応答で誤動作するリスクだけが増える。
+    /// markdown コードフェンスの除去も、実際には一度も観測されていないので入れない
+    /// (必要になれば `TranscriptCleaner` の失敗診断ログが形を教えてくれる)。
+    static func sanitizeModelText(_ raw: String) -> String {
+        guard raw.contains("<|") else {
+            return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var result = ""
+        var rest = Substring(raw)
+        while let open = rest.range(of: "<|") {
+            result += rest[rest.startIndex..<open.lowerBound]
+            let afterOpen = open.upperBound
+            if let close = rest[afterOpen...].range(of: "|>"),
+               isSpecialTokenName(rest[afterOpen..<close.lowerBound]) {
+                // 特殊トークンとして丸ごと捨てる
+                rest = rest[close.upperBound...]
+                continue
+            }
+            // トークンの形をしていない `<|` は本文の一部として残す
+            // (発話に "use <| as a pipe" のような表現が来ても壊さない)
+            result += "<|"
+            rest = rest[afterOpen...]
+        }
+        result += rest
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// `<|` と `|>` に挟まれた文字列が特殊トークン名として妥当か。
+    /// ASCII の英数字・`_`・`-` のみ、1〜32文字に限る。これを緩めると
+    /// 発話本文に現れた `<|` … `|>` が本文ごと食われる。
+    private static func isSpecialTokenName(_ name: Substring) -> Bool {
+        guard !name.isEmpty, name.count <= 32 else { return false }
+        return name.allSatisfy { ch in
+            ch.isASCII && (ch.isLetter || ch.isNumber || ch == "_" || ch == "-")
+        }
     }
 
     /// 1 USD 相当の tick 数。xAI は請求額を整数 tick で返す (docs.x.ai/developers/cost-tracking)。
