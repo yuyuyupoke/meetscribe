@@ -92,6 +92,10 @@ struct HeaderView: View {
         }
         .foregroundStyle(isIdle ? Color.secondary.opacity(0.5) : .secondary)
         .help(help)
+        // アイコンとテキストを1要素にまとめてからラベルを付ける。
+        // SwiftUI はコンテナの子を自動でマージしないので、これが無いと
+        // VoiceOver がアイコンと数字を別々に読み、label/value が効かない。
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(help)
         .accessibilityValue(text)
     }
