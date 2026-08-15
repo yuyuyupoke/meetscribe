@@ -94,6 +94,17 @@ final class TranscriptStore {
         }
     }
 
+    /// 確定済みエントリに日本語訳だけを付与する。**本文には一切触れない**。
+    ///
+    /// クリーナーの `translateOnly` モード用。整形しない代わりに、本文は STT が
+    /// 出したものがそのまま残る (LLM による原文の書き換えが起きない)。
+    /// 該当 itemId が無ければ何もしない (kill/clear 後の遅延到着対策)。
+    func updateTranslation(itemId: String, translation: String?) {
+        if let idx = entries.firstIndex(where: { $0.id == itemId }) {
+            entries[idx].translation = translation
+        }
+    }
+
     /// フィルター対象になった途中結果を削除する。
     func removeItem(itemId: String) {
         entries.removeAll { $0.id == itemId }

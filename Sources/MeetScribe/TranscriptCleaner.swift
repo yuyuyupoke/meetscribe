@@ -1,18 +1,22 @@
 import Foundation
 
-/// 確定した文字起こしセグメントを選択中プロバイダーで「整形 + 対訳」するクリーナー。
-/// - 整形: フィラー (「えー」「あの」"um" 等) の除去と言い直しの統合のみ。内容・言語は変えない
-/// - 対訳: 原文が日本語以外のとき、日本語訳を同時生成する (追加API呼び出しなし)
+/// 確定した文字起こしセグメントを選択中プロバイダーで後処理するクリーナー。
+///
+/// モードは `CleanerMode` で切り替える (既定は `translateOnly`):
+/// - `translateOnly`: 日本語訳だけを生成する。本文は STT の出力のまま
+/// - `formatAndTranslate`: 整形 (フィラー除去・言い直しの統合) もしてから対訳を付ける
+///
 /// 失敗時は nil を返し、呼び出し側は原文を維持する。
 enum TranscriptCleaner {
 
     struct Result: Equatable, Sendable {
-        let cleaned: String
+        /// 整形後テキスト。`translateOnly` では **nil** (= 本文を書き換えない)。
+        let cleaned: String?
         /// 原文が日本語以外の場合のみ。日本語原文なら nil
         let translationJa: String?
     }
 
-    private static let systemPrompt = """
+    private static let formatAndTranslateSystemPrompt = """
     あなたは会議・講義の文字起こし整形担当。入力された文字起こしセグメント1つを処理し、JSONで返す。
 
     整形ルール:
@@ -30,7 +34,31 @@ enum TranscriptCleaner {
     {"cleaned": "整形後テキスト", "translation_ja": "日本語訳 または null"}
     """
 
-    /// 整形に回すべきか。ごく短いセグメントは整形の価値がなく、
+    /// `translateOnly` の system プロンプト (単発)。
+    /// 整形ルールを載せない。仕事を減らすほど出力トークンが減って応答が速くなり
+    /// (実測 84 → 48 トークン、中央値 1.59s → 1.24s)、プロンプトが短いぶん
+    /// キャッシュも効きやすい。
+    private static let translateOnlySystemPrompt = """
+    あなたは会議・講義の文字起こしの翻訳担当。入力された文字起こしセグメント1つを処理し、JSONで返す。
+
+    翻訳ルール:
+    - 原文が日本語以外（英語等）の場合、原文の自然な日本語訳を translation_ja に入れる
+    - 原文が日本語なら translation_ja は null
+    - 要約しない。内容を追加しない
+
+    出力形式 (JSONのみ):
+    {"translation_ja": "日本語訳 または null"}
+    """
+
+    /// 単発呼び出しの system プロンプト。
+    static func systemPrompt(for mode: CleanerMode) -> String {
+        switch mode {
+        case .translateOnly: return translateOnlySystemPrompt
+        case .formatAndTranslate: return formatAndTranslateSystemPrompt
+        }
+    }
+
+    /// クリーナー (整形・対訳) に回すべきか。ごく短いセグメントは得るものが少なく、
     /// LLM が過剰修正するリスクの方が高いので除外する。
     static func shouldClean(_ text: String) -> Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).count >= 6
@@ -54,15 +82,16 @@ enum TranscriptCleaner {
     /// 単発整形のタイムアウト。
     static let singleTimeoutSeconds: TimeInterval = 30
 
-    /// セグメントを整形・対訳して返す。API エラー・タイムアウト・空応答は nil。
+    /// セグメントを後処理して返す。API エラー・タイムアウト・空応答は nil。
     /// 消費トークンのコストは AppState.totalCostUSD に加算する。
     static func clean(
         _ text: String,
         apiKey: String,
-        provider: AIProvider = .openAI
+        provider: AIProvider = .openAI,
+        mode: CleanerMode = CleanerModePolicy.current
     ) async -> Result? {
         let (content, costUSD) = await OpenAIChatClient.complete(
-            system: systemPrompt,
+            system: systemPrompt(for: mode),
             user: text,
             apiKey: apiKey,
             provider: provider,
@@ -78,29 +107,45 @@ enum TranscriptCleaner {
             DebugLog.log("[cleaner] single: no response (HTTP error or timeout)")
             return nil
         }
-        return parseCleanResult(content)
+        return parseCleanResult(content, mode: mode)
     }
 
-    /// LLM の JSON 応答をパースする純関数。cleaned が空・形式不正なら nil。
-    static func parseCleanResult(_ content: String) -> Result? {
+    /// LLM の JSON 応答をパースする純関数。反映できる内容が無ければ nil。
+    ///
+    /// モードで受け取り方が変わる:
+    /// - `formatAndTranslate`: `cleaned` が空・形式不正なら nil (従来どおり)
+    /// - `translateOnly`: `cleaned` は**読まない** (モデルが勝手に返してきても
+    ///   本文の書き換えには使わない)。訳が無ければ反映するものが無いので nil
+    static func parseCleanResult(_ content: String, mode: CleanerMode) -> Result? {
         guard let data = content.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cleaned = (obj["cleaned"] as? String)?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-              !cleaned.isEmpty else {
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        let translation = (obj["translation_ja"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Result(
-            cleaned: cleaned,
-            translationJa: (translation?.isEmpty ?? true) ? nil : translation
-        )
+        let translation = nonEmpty(obj["translation_ja"])
+
+        switch mode {
+        case .translateOnly:
+            guard let translation else { return nil }
+            return Result(cleaned: nil, translationJa: translation)
+        case .formatAndTranslate:
+            guard let cleaned = nonEmpty(obj["cleaned"]) else { return nil }
+            return Result(cleaned: cleaned, translationJa: translation)
+        }
     }
 
-    // MARK: - バッチ整形 (コスト削減: セグメント毎の呼び出しをまとめる)
+    /// JSON の値を「トリム済みで空でない文字列」に落とす (それ以外は nil)。
+    private static func nonEmpty(_ value: Any?) -> String? {
+        guard let text = (value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !text.isEmpty else {
+            return nil
+        }
+        return text
+    }
 
-    private static let batchSystemPrompt = """
+    // MARK: - バッチ処理 (コスト削減: セグメント毎の呼び出しをまとめる)
+
+    private static let batchFormatAndTranslatePrompt = """
     あなたは会議・講義の文字起こし整形担当。入力は文字起こしセグメントの配列(JSON)。
     各要素を独立に処理し、入力と同じ件数・同じ id で結果をJSONで返す。
 
@@ -123,14 +168,41 @@ enum TranscriptCleaner {
     {"items": [{"id": "入力と同じid", "cleaned": "整形後テキスト", "translation_ja": "日本語訳 または null"}, ...]}
     """
 
-    /// 確定セグメントをまとめて1回のLLM呼び出しで整形・対訳する。
+    /// `translateOnly` の system プロンプト (バッチ)。整形ルールは載せない。
+    private static let batchTranslateOnlyPrompt = """
+    あなたは会議・講義の文字起こしの翻訳担当。入力は文字起こしセグメントの配列(JSON)。
+    各要素を独立に翻訳し、入力と同じ件数・同じ id で結果をJSONで返す。
+
+    翻訳ルール:
+    - 原文が日本語以外（英語等）の場合、原文の自然な日本語訳を translation_ja に入れる
+    - 原文が日本語なら translation_ja は null
+    - 要約しない。内容を追加しない
+    - 他のセグメントの内容を混ぜない (各セグメントは独立)
+
+    入力形式:
+    {"items": [{"id": "セグメントのid", "text": "文字起こしテキスト"}, ...]}
+
+    出力形式 (JSONのみ、他のテキストは含めない):
+    {"items": [{"id": "入力と同じid", "translation_ja": "日本語訳 または null"}, ...]}
+    """
+
+    /// バッチ呼び出しの system プロンプト。
+    static func batchSystemPrompt(for mode: CleanerMode) -> String {
+        switch mode {
+        case .translateOnly: return batchTranslateOnlyPrompt
+        case .formatAndTranslate: return batchFormatAndTranslatePrompt
+        }
+    }
+
+    /// 確定セグメントをまとめて1回のLLM呼び出しで処理する。
     /// system prompt の再送コストを セグメント数 → 1回 に削減する狙い。
     /// 応答全体のパースに失敗した場合は nil を返し、呼び出し側はバッチ全件を
     /// 原文のまま維持する (単体 `clean` の失敗時と同じフォールバック方針)。
     static func cleanBatch(
         _ items: [(itemId: String, text: String)],
         apiKey: String,
-        provider: AIProvider = .openAI
+        provider: AIProvider = .openAI,
+        mode: CleanerMode = CleanerModePolicy.current
     ) async -> [(itemId: String, result: Result)]? {
         guard !items.isEmpty else { return [] }
         let payload: [String: Any] = [
@@ -142,7 +214,7 @@ enum TranscriptCleaner {
         }
 
         let (content, costUSD) = await OpenAIChatClient.complete(
-            system: batchSystemPrompt,
+            system: batchSystemPrompt(for: mode),
             user: userContent,
             apiKey: apiKey,
             provider: provider,
@@ -164,13 +236,21 @@ enum TranscriptCleaner {
             DebugLog.log("[cleaner] batch of \(items.count): no response (HTTP error or timeout)")
             return nil
         }
-        return parseBatchResult(content)
+        return parseBatchResult(content, mode: mode)
     }
 
     /// バッチ応答の JSON をパースする純関数。
     /// トップレベルが壊れている ("items" が無い等) 場合のみ nil (= バッチ全件スキップ)。
     /// 個々の要素が壊れている場合はその要素だけ無視する (他要素は活かす)。
-    static func parseBatchResult(_ content: String) -> [(itemId: String, result: Result)]? {
+    ///
+    /// `translateOnly` では `cleaned` を**読まない**: プロンプトで求めていないので
+    /// 通常は返ってこないが、返ってきても本文の書き換えには使わない
+    /// ("In my history" → "In my experience" 型の原文改変を構造的に防ぐ)。
+    /// 訳が無い要素 (= 日本語原文) は反映するものが無いので結果に含めない。
+    static func parseBatchResult(
+        _ content: String,
+        mode: CleanerMode
+    ) -> [(itemId: String, result: Result)]? {
         guard let data = content.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rawItems = obj["items"] as? [[String: Any]] else {
@@ -181,21 +261,17 @@ enum TranscriptCleaner {
         }
         var results: [(itemId: String, result: Result)] = []
         for raw in rawItems {
-            guard let itemId = raw["id"] as? String,
-                  let cleaned = (raw["cleaned"] as? String)?
-                      .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !cleaned.isEmpty else {
-                continue
+            guard let itemId = raw["id"] as? String else { continue }
+            let translation = nonEmpty(raw["translation_ja"])
+
+            switch mode {
+            case .translateOnly:
+                guard let translation else { continue }
+                results.append((itemId, Result(cleaned: nil, translationJa: translation)))
+            case .formatAndTranslate:
+                guard let cleaned = nonEmpty(raw["cleaned"]) else { continue }
+                results.append((itemId, Result(cleaned: cleaned, translationJa: translation)))
             }
-            let translation = (raw["translation_ja"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            results.append((
-                itemId: itemId,
-                result: Result(
-                    cleaned: cleaned,
-                    translationJa: (translation?.isEmpty ?? true) ? nil : translation
-                )
-            ))
         }
         return results
     }

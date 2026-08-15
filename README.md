@@ -21,7 +21,7 @@ MeetScribe は、マイク音声とシステム音声を並列で文字起こし
 
 - **選べるAIプロバイダー** — OpenAI / xAIを設定画面で切り替え。文字起こし・整形・翻訳・Copilotを会議単位で同じプロバイダーへ統一。
 - **デュアルストリーム文字起こし** — マイクとシステム音声を独立にキャプチャし、OpenAI `gpt-realtime-whisper` または xAI Grok Speech to Textへ話者ラベル付きでストリーミング。
-- **インライン整形・翻訳** — OpenAI選択時は`gpt-4.1-mini`、xAI選択時は`grok-4.3`でフィラー除去・言い直し統合・日本語対訳を生成。
+- **インライン日本語対訳** — OpenAI選択時は`gpt-4.1-mini`、xAI選択時は`grok-4.3`で確定セグメントの日本語訳を生成（既定では本文に手を入れないので原文がそのまま残る）。フィラー除去・言い直し統合もさせたい場合は `defaults write com.meetscribe.app cleanerMode format-translate` で従来動作に切り替えられる。
 - **Copilot パネル** — ボタン押下で直近 1/3/5/10 分の発話を日本語で要約する「Catchup」と、発話量・経過時間トリガーで自動更新される「全体像」（目的・議題・現在地）。
 - **自動タイトル生成** — 停止時に選択中のAIが会議タイトルを生成し、`YYYY-MM-DD_HH-mm_<title>.md` として保存。
 - **フローティングパネル** — 常に最前面、サイズ可変、画面共有から非表示（ステルスウィンドウ）。
@@ -171,7 +171,7 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.meetscribe.agent.p
 | `SystemAudioCapture.swift` | `ScreenCaptureKit` タップ |
 | `AIProvider.swift` | プロバイダー別エンドポイント・モデル・料金・サンプルレート |
 | `TranscriptionClient.swift` | OpenAI / xAI Streaming STT WebSocket |
-| `TranscriptCleaner.swift` | 選択プロバイダーによる確定セグメントの整形・対訳 |
+| `TranscriptCleaner.swift` | 選択プロバイダーによる確定セグメントの対訳（既定）・整形（`cleanerMode`で切替） |
 | `CopilotController.swift` | Catchup 要約・全体像自動更新のロジック統括 |
 | `OpenAIChatClient.swift` | OpenAI互換chat/completions共通クライアント（OpenAI / xAI） |
 | `TranscriptExporter.swift` | Markdown レンダリング |

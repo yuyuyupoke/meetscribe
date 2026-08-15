@@ -26,15 +26,17 @@ final class ModelTextSanitizationTests: XCTestCase {
             "この応答が素通りするなら、そもそも欠陥が再現していない"
         )
         XCTAssertNil(
-            TranscriptCleaner.parseBatchResult(observedCleanerResponse),
+            TranscriptCleaner.parseBatchResult(observedCleanerResponse, mode: .formatAndTranslate),
             "サニタイズ前は整形結果を取り出せない (= 対訳が欠落していた)"
         )
     }
 
     func test_observedCleanerResponse_parsesAfterSanitizing() throws {
         let cleaned = OpenAIChatClient.sanitizeModelText(observedCleanerResponse)
+        // 観測した応答は formatAndTranslate 期のスキーマ (`cleaned` 入り) なので、
+        // そのモードでパースして当時の欠陥を再現・回帰させる。
         let items = try XCTUnwrap(
-            TranscriptCleaner.parseBatchResult(cleaned),
+            TranscriptCleaner.parseBatchResult(cleaned, mode: .formatAndTranslate),
             "サニタイズ後はパースできなければならない"
         )
         XCTAssertEqual(items.count, 1)
@@ -79,7 +81,7 @@ final class ModelTextSanitizationTests: XCTestCase {
         let (text, _) = OpenAIChatClient.parseResponse(data, provider: .xAI)
         let content = try XCTUnwrap(text)
         XCTAssertFalse(content.contains("<|eos|>"), "parseResponse が剥がしていない = 配線漏れ")
-        XCTAssertNotNil(TranscriptCleaner.parseBatchResult(content))
+        XCTAssertNotNil(TranscriptCleaner.parseBatchResult(content, mode: .formatAndTranslate))
     }
 
     /// サニタイズはテキストだけの処理で、課金額の計算には触れない。

@@ -17,11 +17,11 @@ final class TranscriptCleanerTests: XCTestCase {
         XCTAssertTrue(TranscriptCleaner.shouldClean("So um, today we will discuss the schedule"))
     }
 
-    // MARK: - parseCleanResult (JSON応答のパース)
+    // MARK: - parseCleanResult (JSON応答のパース / formatAndTranslate = 従来動作)
 
     func test_parseCleanResult_japanese_noTranslation() {
         let json = #"{"cleaned": "今日は会議です", "translation_ja": null}"#
-        let result = TranscriptCleaner.parseCleanResult(json)
+        let result = TranscriptCleaner.parseCleanResult(json, mode: .formatAndTranslate)
 
         XCTAssertEqual(result?.cleaned, "今日は会議です")
         XCTAssertNil(result?.translationJa)
@@ -29,7 +29,7 @@ final class TranscriptCleanerTests: XCTestCase {
 
     func test_parseCleanResult_english_withTranslation() {
         let json = #"{"cleaned": "Let's start the meeting.", "translation_ja": "会議を始めましょう。"}"#
-        let result = TranscriptCleaner.parseCleanResult(json)
+        let result = TranscriptCleaner.parseCleanResult(json, mode: .formatAndTranslate)
 
         XCTAssertEqual(result?.cleaned, "Let's start the meeting.")
         XCTAssertEqual(result?.translationJa, "会議を始めましょう。")
@@ -37,22 +37,54 @@ final class TranscriptCleanerTests: XCTestCase {
 
     func test_parseCleanResult_emptyTranslation_treatedAsNil() {
         let json = #"{"cleaned": "text here", "translation_ja": "  "}"#
-        let result = TranscriptCleaner.parseCleanResult(json)
+        let result = TranscriptCleaner.parseCleanResult(json, mode: .formatAndTranslate)
 
         XCTAssertEqual(result?.cleaned, "text here")
         XCTAssertNil(result?.translationJa)
     }
 
     func test_parseCleanResult_emptyCleaned_returnsNil() {
-        XCTAssertNil(TranscriptCleaner.parseCleanResult(#"{"cleaned": "", "translation_ja": null}"#))
+        XCTAssertNil(TranscriptCleaner.parseCleanResult(
+            #"{"cleaned": "", "translation_ja": null}"#, mode: .formatAndTranslate
+        ))
     }
 
     func test_parseCleanResult_malformed_returnsNil() {
-        XCTAssertNil(TranscriptCleaner.parseCleanResult("not json"))
-        XCTAssertNil(TranscriptCleaner.parseCleanResult(#"{"other": 1}"#))
+        XCTAssertNil(TranscriptCleaner.parseCleanResult("not json", mode: .formatAndTranslate))
+        XCTAssertNil(TranscriptCleaner.parseCleanResult(#"{"other": 1}"#, mode: .formatAndTranslate))
+        XCTAssertNil(TranscriptCleaner.parseCleanResult("not json", mode: .translateOnly))
     }
 
-    // MARK: - parseBatchResult (バッチ応答のパース)
+    // MARK: - parseCleanResult (translateOnly)
+
+    func test_parseCleanResult_translateOnly_takesTranslationAndLeavesCleanedNil() {
+        let result = TranscriptCleaner.parseCleanResult(
+            #"{"translation_ja": "会議を始めましょう。"}"#, mode: .translateOnly
+        )
+
+        XCTAssertEqual(result?.translationJa, "会議を始めましょう。")
+        XCTAssertNil(result?.cleaned, "本文を書き換える材料を持ってはいけない")
+    }
+
+    /// 訳が無ければ反映するものが無い (日本語原文)。
+    func test_parseCleanResult_translateOnly_nullTranslation_returnsNil() {
+        XCTAssertNil(TranscriptCleaner.parseCleanResult(
+            #"{"translation_ja": null}"#, mode: .translateOnly
+        ))
+    }
+
+    /// プロンプトで求めていない `cleaned` が返ってきても、本文の書き換えには使わない。
+    func test_parseCleanResult_translateOnly_ignoresUnrequestedCleaned() {
+        let result = TranscriptCleaner.parseCleanResult(
+            #"{"cleaned": "In my experience", "translation_ja": "私の経験では"}"#,
+            mode: .translateOnly
+        )
+
+        XCTAssertNil(result?.cleaned, "translateOnly で原文改変の材料を通してはいけない")
+        XCTAssertEqual(result?.translationJa, "私の経験では")
+    }
+
+    // MARK: - parseBatchResult (バッチ応答のパース / formatAndTranslate = 従来動作)
 
     func test_parseBatchResult_multipleItems_parsesAll() {
         let json = #"""
@@ -61,19 +93,22 @@ final class TranscriptCleanerTests: XCTestCase {
             {"id": "b", "cleaned": "Let's start.", "translation_ja": "始めましょう。"}
         ]}
         """#
-        let result = TranscriptCleaner.parseBatchResult(json)
+        let result = TranscriptCleaner.parseBatchResult(json, mode: .formatAndTranslate)
 
         XCTAssertEqual(result?.count, 2)
         XCTAssertEqual(result?[0].itemId, "a")
         XCTAssertEqual(result?[0].result.cleaned, "今日は会議です")
         XCTAssertNil(result?[0].result.translationJa)
         XCTAssertEqual(result?[1].itemId, "b")
+        XCTAssertEqual(result?[1].result.cleaned, "Let's start.")
         XCTAssertEqual(result?[1].result.translationJa, "始めましょう。")
     }
 
     func test_parseBatchResult_topLevelMalformed_returnsNil() {
-        XCTAssertNil(TranscriptCleaner.parseBatchResult("not json"))
-        XCTAssertNil(TranscriptCleaner.parseBatchResult(#"{"other": 1}"#))
+        for mode in CleanerMode.allCases {
+            XCTAssertNil(TranscriptCleaner.parseBatchResult("not json", mode: mode))
+            XCTAssertNil(TranscriptCleaner.parseBatchResult(#"{"other": 1}"#, mode: mode))
+        }
     }
 
     func test_parseBatchResult_oneItemMalformed_skipsOnlyThatItem() {
@@ -84,15 +119,75 @@ final class TranscriptCleanerTests: XCTestCase {
             {"missing_id": true}
         ]}
         """#
-        let result = TranscriptCleaner.parseBatchResult(json)
+        let result = TranscriptCleaner.parseBatchResult(json, mode: .formatAndTranslate)
 
         XCTAssertEqual(result?.count, 1)
         XCTAssertEqual(result?.first?.itemId, "a")
     }
 
     func test_parseBatchResult_emptyItemsArray_returnsEmptyNotNil() {
-        let result = TranscriptCleaner.parseBatchResult(#"{"items": []}"#)
-        XCTAssertEqual(result?.count, 0)
+        for mode in CleanerMode.allCases {
+            XCTAssertEqual(TranscriptCleaner.parseBatchResult(#"{"items": []}"#, mode: mode)?.count, 0)
+        }
+    }
+
+    // MARK: - parseBatchResult (translateOnly)
+    //
+    // translateOnly の応答には `cleaned` が無い。本文には触れず訳だけ反映するため、
+    // `cleaned` は nil で返ってこなければならない (nil が「本文を書き換えない」の合図)。
+
+    func test_parseBatchResult_translateOnly_parsesTranslationOnlyResponse() {
+        let json = #"""
+        {"items": [
+            {"id": "a", "translation_ja": "始めましょう。"},
+            {"id": "b", "translation_ja": "次のスライドです。"}
+        ]}
+        """#
+        let result = TranscriptCleaner.parseBatchResult(json, mode: .translateOnly)
+
+        XCTAssertEqual(result?.count, 2)
+        XCTAssertEqual(result?[0].itemId, "a")
+        XCTAssertEqual(result?[0].result.translationJa, "始めましょう。")
+        XCTAssertNil(result?[0].result.cleaned)
+        XCTAssertEqual(result?[1].result.translationJa, "次のスライドです。")
+        XCTAssertNil(result?[1].result.cleaned)
+    }
+
+    /// 日本語原文 (translation_ja が null) は反映するものが無いので結果に含めない。
+    func test_parseBatchResult_translateOnly_skipsItemsWithoutTranslation() {
+        let json = #"""
+        {"items": [
+            {"id": "ja", "translation_ja": null},
+            {"id": "blank", "translation_ja": "   "},
+            {"id": "en", "translation_ja": "始めましょう。"}
+        ]}
+        """#
+        let result = TranscriptCleaner.parseBatchResult(json, mode: .translateOnly)
+
+        XCTAssertEqual(result?.count, 1)
+        XCTAssertEqual(result?.first?.itemId, "en")
+    }
+
+    /// 求めていない `cleaned` が混ざっても本文書き換えには使わない
+    /// (整形なしの狙いは "In my history" → "In my experience" 型の原文改変を防ぐこと)。
+    func test_parseBatchResult_translateOnly_ignoresUnrequestedCleaned() {
+        let json = #"""
+        {"items": [{"id": "a", "cleaned": "In my experience", "translation_ja": "私の経験では"}]}
+        """#
+        let result = TranscriptCleaner.parseBatchResult(json, mode: .translateOnly)
+
+        XCTAssertEqual(result?.count, 1)
+        XCTAssertNil(result?.first?.result.cleaned)
+        XCTAssertEqual(result?.first?.result.translationJa, "私の経験では")
+    }
+
+    /// 逆に formatAndTranslate は `cleaned` が無い応答を採用しない (本文が消える事故を防ぐ)。
+    func test_parseBatchResult_formatAndTranslate_skipsItemsWithoutCleaned() {
+        let json = #"{"items": [{"id": "a", "translation_ja": "始めましょう。"}]}"#
+        XCTAssertEqual(
+            TranscriptCleaner.parseBatchResult(json, mode: .formatAndTranslate)?.count,
+            0
+        )
     }
 
     // MARK: - diagnosticShape (パース失敗の診断)

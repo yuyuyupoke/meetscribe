@@ -23,7 +23,19 @@ actor TranscriptCleanerBatcher {
     typealias BatchRunner = @Sendable ([PendingItem], String, AIProvider) async -> [(itemId: String, result: TranscriptCleaner.Result)]?
 
     static let batchSize = 5
-    static let defaultMaxWaitSeconds: TimeInterval = 8
+
+    /// 最古の要素をどれだけ待たせてよいか。
+    ///
+    /// **8秒から3秒に短縮した (2026-08-15)**。待ち時間が対訳表示の遅延の主因だった:
+    /// 2026-08-14 の講義 (cleaner 604回) では**1バッチ平均1.52件**しか溜まっておらず、
+    /// `batchSize`(5) にはまず届かず**毎回8秒タイマーで発火**していた。つまり
+    /// 実質「確定 → 最大8秒 (平均4秒) 待ち → LLM 6.0秒 → 表示」で、
+    /// 平均10秒・最悪14秒かかっていた。
+    ///
+    /// 3秒にすると呼び出し回数は約1.3倍に増えるが、入力コストの増分は小さい:
+    /// system プロンプトは毎回ほぼ同じでキャッシュヒット率が実測83%あり、
+    /// 増えるのは主にキャッシュ済みトークンの再送分だから。
+    static let defaultMaxWaitSeconds: TimeInterval = 3
 
     private let runBatch: BatchRunner
     private let maxWaitSeconds: TimeInterval
@@ -143,11 +155,20 @@ actor TranscriptCleanerBatcher {
         }
         for entry in results {
             await MainActor.run {
-                TranscriptStore.shared.updateFinalText(
-                    itemId: entry.itemId,
-                    text: entry.result.cleaned,
-                    translation: entry.result.translationJa
-                )
+                if let cleaned = entry.result.cleaned {
+                    TranscriptStore.shared.updateFinalText(
+                        itemId: entry.itemId,
+                        text: cleaned,
+                        translation: entry.result.translationJa
+                    )
+                } else {
+                    // 整形結果が無い (`translateOnly`) → **本文には触れず訳だけ反映**する。
+                    // 整形されない代わりに、STT が出した原文が LLM に書き換えられない。
+                    TranscriptStore.shared.updateTranslation(
+                        itemId: entry.itemId,
+                        translation: entry.result.translationJa
+                    )
+                }
             }
         }
     }

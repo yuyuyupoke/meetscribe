@@ -121,6 +121,50 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertNil(store.entries[0].translation)
     }
 
+    // MARK: - updateTranslation (translateOnly クリーナーの反映経路)
+    //
+    // 整形しないモードでは**本文が STT の出力のまま残る**のが正しい挙動。
+    // ここで本文に触れてしまうと「整形しない代わりに原文が改変されない」という
+    // モードの前提そのものが壊れる。
+
+    func test_updateTranslation_setsTranslationWithoutTouchingText() {
+        store.completeItem(itemId: "item-1", finalText: "In my history, we did that", speaker: .other)
+        store.updateTranslation(itemId: "item-1", translation: "私の経験では、それをやりました")
+
+        XCTAssertEqual(
+            store.entries[0].text,
+            "In my history, we did that",
+            "translateOnly では本文を書き換えてはいけない"
+        )
+        XCTAssertEqual(store.entries[0].translation, "私の経験では、それをやりました")
+        XCTAssertTrue(store.entries[0].isFinal)
+    }
+
+    func test_updateTranslation_nonexistentId_doesNothing() {
+        // kill/clear 後に遅れて届いたバッチ結果で落ちない・復活させない
+        store.updateTranslation(itemId: "ghost", translation: "訳")
+        XCTAssertTrue(store.entries.isEmpty)
+    }
+
+    func test_updateTranslation_doesNotAffectOtherEntries() {
+        store.completeItem(itemId: "item-1", finalText: "first", speaker: .me)
+        store.completeItem(itemId: "item-2", finalText: "second", speaker: .other)
+        store.updateTranslation(itemId: "item-2", translation: "2番目")
+
+        XCTAssertEqual(store.entries[0].text, "first")
+        XCTAssertNil(store.entries[0].translation)
+        XCTAssertEqual(store.entries[1].text, "second")
+        XCTAssertEqual(store.entries[1].translation, "2番目")
+    }
+
+    func test_updateTranslation_nilTranslation_keepsText() {
+        store.completeItem(itemId: "item-1", finalText: "こんにちは", speaker: .me)
+        store.updateTranslation(itemId: "item-1", translation: nil)
+
+        XCTAssertEqual(store.entries[0].text, "こんにちは")
+        XCTAssertNil(store.entries[0].translation)
+    }
+
     func test_removeItem_removesMatchingPartial() {
         store.replacePartial("hallucination", itemId: "xai-1", speaker: .other)
         store.removeItem(itemId: "xai-1")
