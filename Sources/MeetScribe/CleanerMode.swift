@@ -73,6 +73,20 @@ enum CleanerModePolicy {
         return CleanerMode(rawValue: value)
     }
 
-    /// プロセス起動時に一度だけ解決した値。
-    static let current: CleanerMode = resolve()
+    /// 実際に使う値。**呼び出しのたびに解決する** (`static let` にしない)。
+    ///
+    /// `static let` だと Swift のグローバル遅延初期化で「その起動で最初に
+    /// cleaner が走った瞬間」に凍結され、以後プロセスが死ぬまで変わらない。
+    /// MeetScribe はメニューバー常駐で何日も起動しっぱなしになるため、
+    /// `defaults write com.meetscribe.app cleanerMode format-translate` を打っても
+    /// **その起動で既に1回でも録音していたら反映されない**。しかも
+    /// 「まだ録音していなければ効く／していれば効かない」という再現しない挙動になる。
+    ///
+    /// 実際 `SessionLengthLimitPolicy` は録音開始ごとに解決していて、
+    /// `maxSessionMinutes` はアプリを再起動せずに反映された。ロールバック手段の
+    /// 挙動が設定ごとに違うと混乱するので、こちらも都度解決に揃える。
+    ///
+    /// `UserDefaults` の読み取りはメモリキャッシュ経由で、cleaner のバッチ
+    /// (数秒に1回) の頻度なら計測できるコストにならない。
+    static var current: CleanerMode { resolve() }
 }

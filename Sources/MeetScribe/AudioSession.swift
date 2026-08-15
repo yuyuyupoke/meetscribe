@@ -212,6 +212,14 @@ final class AudioSession {
             return
         }
 
+        // このセッションで効いている後処理の設定を残す。`defaults write` での
+        // 切り替えが実際に反映されたかを、ユーザーがログ1行で確認できるようにする
+        // (`session length cap` と同じ役割)。**設定値だけで発話本文は出さない。**
+        DebugLog.log(
+            "[MeetScribe] cleaner mode = \(CleanerModePolicy.current.rawValue)"
+                + ", reasoning effort = \(ReasoningEffortPolicy.current ?? "default")"
+        )
+
         // 会議開始時刻をマーク + Copilot (全体像の自動更新) 開始 + 無音検知タイマー起動 (10分)
         let meetingStartedAt = Date()
         AppState.shared.meetingStartedAt = meetingStartedAt

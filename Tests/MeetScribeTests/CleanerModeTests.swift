@@ -215,4 +215,39 @@ final class CleanerModeTests: XCTestCase {
         XCTAssertTrue(prompt.contains("同じ id"), prompt)
         XCTAssertTrue(prompt.contains("各セグメントは独立"), prompt)
     }
+
+    // MARK: - current は都度解決する
+    //
+    // `static let` にすると Swift のグローバル遅延初期化で「その起動で最初に
+    // cleaner が走った瞬間」に凍結される。MeetScribe はメニューバー常駐で
+    // 何日も起動しっぱなしなので、`defaults write` を打っても**その起動で既に
+    // 録音していたら反映されず**、しかも「まだ録音していなければ効く」という
+    // 再現しない挙動になる。`SessionLengthLimitPolicy` は録音開始ごとに解決していて
+    // `maxSessionMinutes` は再起動なしで反映されたので、こちらも揃える。
+
+    func test_current_reresolvesOnEachAccess() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment[CleanerModePolicy.environmentKey] != nil,
+            "環境変数が設定された環境では UserDefaults 経路を検証できない"
+        )
+        let key = CleanerModePolicy.userDefaultsKey
+        let original = UserDefaults.standard.string(forKey: key)
+        addTeardownBlock {
+            let defaults = UserDefaults.standard
+            if let original {
+                defaults.set(original, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(CleanerModePolicy.current, .translateOnly, "未設定なら既定")
+
+        UserDefaults.standard.set(CleanerMode.formatAndTranslate.rawValue, forKey: key)
+        XCTAssertEqual(
+            CleanerModePolicy.current, .formatAndTranslate,
+            "static let に戻すとここが translateOnly のまま = defaults write が効かない"
+        )
+    }
 }

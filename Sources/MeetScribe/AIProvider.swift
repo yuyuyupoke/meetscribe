@@ -196,8 +196,13 @@ enum ReasoningEffortPolicy {
         return value
     }
 
-    /// プロセス起動時に一度だけ解決した値。
-    static let current: String? = resolve()
+    /// 実際に送る値。**呼び出しのたびに解決する** (`static let` にしない)。
+    ///
+    /// `static let` だと「その起動で最初に LLM を呼んだ瞬間」に凍結され、
+    /// 常駐アプリでは `defaults write com.meetscribe.app reasoningEffort default` を
+    /// 打っても既に録音済みの起動では反映されない (しかも再現しない挙動になる)。
+    /// 詳細な理由は `CleanerModePolicy.current` のコメントを参照。
+    static var current: String? { resolve() }
 }
 
 /// プロンプトキャッシュのヒット率を上げるための、用途ごとに安定したキー。
