@@ -36,6 +36,24 @@ enum TranscriptCleaner {
         text.trimmingCharacters(in: .whitespacesAndNewlines).count >= 6
     }
 
+    // MARK: - タイムアウト
+    //
+    // 2026-08-14 の講義中に実測: cleaner 呼び出し85件中1件 (1.2%) が20秒で
+    // タイムアウトし、**そのバッチ3件ぶんの対訳が丸ごと落ちた**
+    // (`cleanBatch` が nil を返すと呼び出し側はバッチ全件を原文のまま維持する)。
+    // 応答は通常数秒で返るので、20秒はネットワークの一時的な詰まりを吸収しきれていない。
+    //
+    // 延ばしても後続バッチは待たされない: `TranscriptCleanerBatcher` は各バッチを
+    // 独立した Task で走らせ、actor の reentrancy で `await` 中に次のバッチが進む。
+    // ただし**停止時は in-flight バッチの完了を待つ**ので (`flushAll`)、
+    // タイムアウトに張り付いた1件があると停止が最大この秒数だけ延びる。
+    // それでも `waitForSaveCompletion` の90秒上限に収まる。
+
+    /// バッチ整形のタイムアウト。件数が多いほど出力が長くなるのでこちらを長めに取る。
+    static let batchTimeoutSeconds: TimeInterval = 40
+    /// 単発整形のタイムアウト。
+    static let singleTimeoutSeconds: TimeInterval = 30
+
     /// セグメントを整形・対訳して返す。API エラー・タイムアウト・空応答は nil。
     /// 消費トークンのコストは AppState.totalCostUSD に加算する。
     static func clean(
@@ -48,7 +66,7 @@ enum TranscriptCleaner {
             user: text,
             apiKey: apiKey,
             provider: provider,
-            timeout: 15,
+            timeout: singleTimeoutSeconds,
             forceJSON: true,
             cacheKey: PromptCacheKey.cleanerSingle,
             usageLabel: "cleaner-single"
@@ -56,7 +74,10 @@ enum TranscriptCleaner {
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }
         }
-        guard let content else { return nil }
+        guard let content else {
+            DebugLog.log("[cleaner] single: no response (HTTP error or timeout)")
+            return nil
+        }
         return parseCleanResult(content)
     }
 
@@ -125,7 +146,7 @@ enum TranscriptCleaner {
             user: userContent,
             apiKey: apiKey,
             provider: provider,
-            timeout: 20,
+            timeout: batchTimeoutSeconds,
             forceJSON: true,
             cacheKey: PromptCacheKey.cleanerBatch,
             // バッチ件数までログに残す。1回あたりの単価だけでは「何件を1回に
@@ -135,7 +156,14 @@ enum TranscriptCleaner {
         if costUSD > 0 {
             await MainActor.run { AppState.shared.addCost(costUSD) }
         }
-        guard let content else { return nil }
+        guard let content else {
+            // **パース失敗と区別する。** 2026-08-14 に「診断ログが0件だから
+            // `<|eos|>` は直った」と読んだ直後に、実際はタイムアウトで
+            // 同じバッチが落ちていたことが分かった。呼び出し側のログは
+            // どちらも「バッチ全件スキップ」に見えるため、原因はここで分ける。
+            DebugLog.log("[cleaner] batch of \(items.count): no response (HTTP error or timeout)")
+            return nil
+        }
         return parseBatchResult(content)
     }
 

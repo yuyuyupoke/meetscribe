@@ -131,9 +131,14 @@ actor TranscriptCleanerBatcher {
         queue.removeFirst(batch.count)
 
         guard let results = await runBatch(batch, apiKey, provider) else {
-            // パース失敗 (トップレベル形式不正) → バッチ全件スキップ。
-            // 呼び出し元 (TranscriptionClient) が既に表示した原文がそのまま残る。
-            DebugLog.log("[cleaner-batch] batch of \(batch.count) failed to parse, skipping formatting")
+            // バッチ全件スキップ。呼び出し元 (TranscriptionClient) が既に表示した
+            // 原文がそのまま残る (= このバッチのセグメントは対訳が付かない)。
+            //
+            // **原因は "failed to parse" と決めつけない。** タイムアウト / HTTPエラー /
+            // JSONパース失敗のどれでも nil になる。2026-08-14 にここを
+            // 「パース失敗」と読んだせいで、実際はタイムアウトだった事象を
+            // 誤診しかけた。内訳は `TranscriptCleaner` 側が直前の行に出す。
+            DebugLog.log("[cleaner-batch] batch of \(batch.count) not applied, keeping raw text")
             return
         }
         for entry in results {

@@ -236,4 +236,35 @@ final class OpenAIChatClientTests: XCTestCase {
         XCTAssertEqual(result.text, "ok")
         XCTAssertEqual(result.costUSD, expected, accuracy: 1e-12)
     }
+
+    // MARK: - タイムアウト
+    //
+    // 2026-08-14 の講義中に実測: cleaner 85件中1件 (1.2%) が20秒でタイムアウトし、
+    // **そのバッチ3件ぶんの対訳が丸ごと落ちた**。1件の失敗が複数セグメントに波及するため、
+    // 単発より長く取る。値を戻すと同じ取りこぼしが再発するので数値ごと固定する。
+
+    func test_timeouts_areLongEnoughForObservedLatency() {
+        XCTAssertEqual(TranscriptCleaner.batchTimeoutSeconds, 40)
+        XCTAssertEqual(TranscriptCleaner.singleTimeoutSeconds, 30)
+    }
+
+    /// バッチは件数ぶん出力が長くなるので、単発より短くしてはいけない。
+    func test_batchTimeout_isNotShorterThanSingle() {
+        XCTAssertGreaterThanOrEqual(
+            TranscriptCleaner.batchTimeoutSeconds,
+            TranscriptCleaner.singleTimeoutSeconds
+        )
+    }
+
+    /// タイムアウトに張り付いた in-flight バッチがあると停止が延びる
+    /// (`flushAll` が完了を待つ)。`waitForSaveCompletion` の90秒上限に収まること。
+    func test_batchTimeout_fitsWithinSaveCompletionBudget() {
+        XCTAssertLessThan(TranscriptCleaner.batchTimeoutSeconds, 90)
+    }
+
+    /// 旧値 (単発15秒 / バッチ20秒) より延ばしたことを固定する。
+    func test_timeouts_exceedPreviousValues() {
+        XCTAssertGreaterThan(TranscriptCleaner.singleTimeoutSeconds, 15)
+        XCTAssertGreaterThan(TranscriptCleaner.batchTimeoutSeconds, 20)
+    }
 }
