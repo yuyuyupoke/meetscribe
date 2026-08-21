@@ -60,9 +60,9 @@ final class ModelTextSanitizationTests: XCTestCase {
     /// タイトルは JSON ではないので落ちはしないが、`<|eos|>` が
     /// **議事録のファイル名**に混入する経路になっていた。
     func test_titleResponse_dropsSpecialToken() {
-        let sanitized = OpenAIChatClient.sanitizeModelText("オフショア入門<|eos|>")
-        XCTAssertEqual(sanitized, "オフショア入門")
-        XCTAssertEqual(MeetingTitleGenerator.cleanUp(sanitized), "オフショア入門")
+        let sanitized = OpenAIChatClient.sanitizeModelText("会議タイトル案<|eos|>")
+        XCTAssertEqual(sanitized, "会議タイトル案")
+        XCTAssertEqual(MeetingTitleGenerator.cleanUp(sanitized), "会議タイトル案")
         XCTAssertFalse(MeetingTitleGenerator.cleanUp(sanitized).contains("<|"))
     }
 

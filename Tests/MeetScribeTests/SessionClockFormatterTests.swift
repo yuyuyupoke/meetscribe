@@ -87,7 +87,7 @@ final class SessionClockFormatterTests: XCTestCase {
     }
 
     func test_startTime_respectsTimeZone() {
-        // テキサス (CDT = UTC-5) と日本 (UTC+9) で同じ瞬間が違う表記になる
+        // 米中部時間 (CDT = UTC-5) と日本 (UTC+9) で同じ瞬間が違う表記になる
         let date = Date(timeIntervalSince1970: 12 * 3_600)
         XCTAssertEqual(
             SessionClockFormatter.startTime(date, timeZone: TimeZone(secondsFromGMT: -5 * 3_600)!),
