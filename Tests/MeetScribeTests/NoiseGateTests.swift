@@ -7,10 +7,21 @@ final class NoiseGateTests: XCTestCase {
     // MARK: - Default Config
 
     // 期待値は NoiseGate.swift の設計値に一致させる:
-    // マイクは Voice Processing (AGC+NS) 後の低レベル信号に合わせ緩め (-55/-60)、
-    // システム音はさらに緩め (-60/-65)。いずれも 5dB のヒステリシス幅。
+    // マイク (生キャプチャ) は AGC 増幅が無いぶん緩め (-62/-68)、
+    // エコーキャンセル ON 時は AGC 後レベルに合わせた従来値 (-55/-60)、
+    // システム音は (-60/-65)。
     func test_microphoneConfig_hasCorrectDefaults() {
         let config = NoiseGate.Config.microphone
+        XCTAssertEqual(config.openThresholdDB, -62.0)
+        XCTAssertEqual(config.closeThresholdDB, -68.0)
+        XCTAssertGreaterThan(config.openThresholdDB, config.closeThresholdDB,
+                             "Open threshold must be higher than close for hysteresis")
+        XCTAssertEqual(config.holdMs, 1000.0,
+                       "xAI endpointing=500msより長く無音を観測させるためhold必須")
+    }
+
+    func test_microphoneVoiceProcessingConfig_hasCorrectDefaults() {
+        let config = NoiseGate.Config.microphoneVoiceProcessing
         XCTAssertEqual(config.openThresholdDB, -55.0)
         XCTAssertEqual(config.closeThresholdDB, -60.0)
         XCTAssertGreaterThan(config.openThresholdDB, config.closeThresholdDB,
@@ -174,9 +185,10 @@ final class NoiseGateTests: XCTestCase {
 
     func test_process_veryQuietNoise_gated() {
         let gate = NoiseGate(config: .microphone)
-        // Amplitude 0.001 → RMS dB ≈ -63 dBFS, below -45 close threshold
+        // Amplitude 0.0004 → RMS ≈ -73 dBFS (静かな室内の環境音相当)。
+        // open threshold -62 dBFS を明確に下回るのでゲートされる
         let quiet = TestHelpers.makeNoiseBuffer(
-            amplitude: 0.001, sampleRate: 24000, frameCount: 1024
+            amplitude: 0.0004, sampleRate: 24000, frameCount: 1024
         )
         let result = gate.process(quiet, sampleRate: 24000)
         XCTAssertNil(result, "Very quiet noise should be gated")

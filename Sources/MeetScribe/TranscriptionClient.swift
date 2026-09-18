@@ -64,12 +64,15 @@ final class TranscriptionClient: NSObject, @unchecked Sendable {
     /// 拒否するため、200ms 分 (24kHz * 2byte * 0.2s = 9,600B) を下限にする。
     private static let minCommitBytes = 9_600
 
-    /// 有声判定のピーク振幅閾値 (PCM16、≈ -36 dBFS)。マイク (VPIO ノイズ抑制後) や
-    /// 再生なしのシステム音声は無音でも PCM が流れ続けるため、バイト量だけでは
-    /// 無音ウィンドウを判別できない。閾値未満しか無いウィンドウは commit せず
-    /// clear で捨てて、無音ハルシネーションと課金を防ぐ。控えめ (低め) の値にして
-    /// 小声の発話を取りこぼさないことを優先する。
-    private static let voicePeakThreshold: Int16 = 500
+    /// 有声判定のピーク振幅閾値 (PCM16、≈ -43 dBFS)。マイクや再生なしのシステム音声は
+    /// 無音でも PCM が流れ続けるため、バイト量だけでは無音ウィンドウを判別できない。
+    /// 閾値未満しか無いウィンドウは commit せず clear で捨てて、無音ハルシネーションと
+    /// 課金を防ぐ。控えめ (低め) の値にして小声の発話を取りこぼさないことを優先する。
+    /// 旧値 500 (≈ -36 dBFS) は VPIO の AGC 増幅後の信号が前提だった。生キャプチャ化
+    /// (エコーキャンセルのデフォルト OFF 化) とノイズゲート開閾値の緩和 (-55 → -62 dBFS)
+    /// に合わせて同じ 7dB ぶん下げる: 500 × 10^(-7/20) ≈ 220。ゲートを通過した小声が
+    /// ここで無音扱いになって捨てられる逆行を防ぐ。
+    private static let voicePeakThreshold: Int16 = 220
 
     /// トランスポート。**`stateLock` 配下で保持する。**
     /// main actor / audio スレッド / URLSession delegate queue の3系統から触られるため、

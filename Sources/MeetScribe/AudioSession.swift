@@ -72,8 +72,13 @@ final class AudioSession {
     private var sessionLimiter: SessionLengthLimiter?
 
     /// クライアント側ノイズフィルタ。環境音・機械音を OpenAI に送る前に除去する。
-    private let micPreProcessor = AudioPreProcessor(config: .microphone, label: "mic-pre")
+    /// マイク側はエコーキャンセル設定でゲート閾値が変わるため start() で作り直す (var)。
+    private var micPreProcessor = AudioPreProcessor(config: .microphone, label: "mic-pre")
     private let sysPreProcessor = AudioPreProcessor(config: .systemAudio, label: "sys-pre")
+
+    /// 現セッションのエコーキャンセル (Voice Processing) 設定。start() 時の値を固定し、
+    /// watchdog によるマイク再起動でも同じモードを維持する (activeLanguage と同じ発想)。
+    private var activeVoiceProcessing = false
 
     /// 再接続中の Task。多重再接続を防ぐためストリームごとに 1 本だけ保持。
     private var micReconnectTask: Task<Void, Never>?
@@ -123,9 +128,17 @@ final class AudioSession {
         AppState.shared.lastSavedURL = nil
         AppState.shared.totalCostUSD = 0
         TranscriptStore.shared.clear()
-        // singleton (AudioSession) が保持する前処理器は会議間で再利用されるため、
-        // passRate 等の統計を会議単位にリセットする (デバッグログの意味を保つため)。
-        micPreProcessor.resetStats()
+        // エコーキャンセル設定は録音開始時点の値をセッション全体で固定する。
+        // マイク前処理器はゲート閾値が VPIO 有無で変わるため会議ごとに作り直す
+        // (新規インスタンスなので統計もリセットされる)。
+        let voiceProcessing = AppState.shared.echoCancellationEnabled
+        self.activeVoiceProcessing = voiceProcessing
+        micPreProcessor = AudioPreProcessor(
+            config: voiceProcessing ? .microphoneVoiceProcessing : .microphone,
+            label: "mic-pre"
+        )
+        // singleton (AudioSession) が保持するシステム音前処理器は会議間で再利用される
+        // ため、passRate 等の統計を会議単位にリセットする (デバッグログの意味を保つため)。
         sysPreProcessor.resetStats()
         // 前回セッションの残キューが新セッションに紛れ込まないよう防御的に破棄する
         // (通常は stop()/kill() で処理済みのはず)。
@@ -195,7 +208,10 @@ final class AudioSession {
         }
 
         do {
-            try microphone.start(onBuffer: makeMicrophoneHandler(pipeline: micPipeline))
+            try microphone.start(
+                voiceProcessing: voiceProcessing,
+                onBuffer: makeMicrophoneHandler(pipeline: micPipeline)
+            )
         } catch {
             AppState.shared.lastError = "マイク起動失敗: \(error.localizedDescription)"
             AppState.shared.captureStatus = .error(error.localizedDescription)
@@ -602,7 +618,10 @@ final class AudioSession {
             "\(Self.micStallErrorPrefix) 音声が届かなくなりました (入力デバイスの切替?)。マイクを再起動しています…"
         microphone.stop()
         do {
-            try microphone.start(onBuffer: makeMicrophoneHandler(pipeline: micPipeline))
+            try microphone.start(
+                voiceProcessing: activeVoiceProcessing,
+                onBuffer: makeMicrophoneHandler(pipeline: micPipeline)
+            )
             DebugLog.log("[MeetScribe] mic engine restarted (attempt \(attempt))")
             // 成功バナーの消去は監視ループ側で行う (実際に tap が戻ったのを確認してから)。
         } catch {

@@ -44,10 +44,21 @@ OpenAI Realtime API Beta エンドポイントは廃止済み。最新リリー�
 
 ## マイクが相手側の音声を拾う（二重ラベルのトランスクリプト）
 
-Voice Processing で抑制されるはずだが、一部の Bluetooth ヘッドセットではエコー経路が長すぎて回避できない場合がある。
+スピーカー再生中の相手の声をマイクが拾い、`[自分]` として二重記録されるケース。
 
-- 可能であれば有線ヘッドホンを使用する
+- イヤホン・ヘッドホンを使えば物理的に発生しない（推奨）
+- スピーカーを使い続ける場合は `defaults write com.meetscribe.app echoCancellationEnabled -bool true`
+  でエコーキャンセル（Voice Processing）を有効化できる。ただし **ON にすると Discord / Zoom 等の
+  通話アプリと併用できない**（録音開始の瞬間に通話アプリ側のマイク入力が停止し、相手に声が
+  届かなくなる。macOS 側の既知問題でアプリからの回避策はない）。戻すときは
+  `defaults write com.meetscribe.app echoCancellationEnabled -bool false`
 - 出力音量を下げる。AEC は中程度の音量で最も効果的に動作する
+
+## 録音を開始したら通話アプリ（Discord / Zoom 等）で相手に声が届かなくなった
+
+エコーキャンセル（上記）を手動で ON にしていると発生する。デフォルト OFF のままなら発生しない。
+`defaults delete com.meetscribe.app echoCancellationEnabled` でデフォルトに戻せる。
+通話アプリ側は入力デバイスを選び直す（または通話に入り直す）と復帰する。
 
 ## 証明書セットアップで openssl の -legacy 関連エラーが出る
 

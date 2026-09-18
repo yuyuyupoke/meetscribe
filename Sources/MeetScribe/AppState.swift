@@ -80,6 +80,17 @@ final class AppState {
         didSet { UserDefaults.standard.set(showTranslations, forKey: Self.translationsKey) }
     }
 
+    // エコーキャンセル (macOS Voice Processing: AEC+AGC+NS) の ON/OFF。
+    // **デフォルト OFF**: ON にした瞬間にマイクデバイスが再構成され、同じマイクを
+    // 使用中の通話アプリ (Discord/Zoom 等) の音声入力が停止する = 相手に声が
+    // 届かなくなるため (詳細は MicrophoneCapture のコメント参照)。
+    // スピーカー利用時に相手の声が [自分] として二重記録される場合のみ、
+    // `defaults write com.meetscribe.app echoCancellationEnabled -bool true` で
+    // オプトインできる (設定 UI は意図的に置かない)。次回の録音開始から適用。
+    var echoCancellationEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(echoCancellationEnabled, forKey: Self.echoCancellationKey) }
+    }
+
     // MARK: - 開発の応援バナー
 
     /// 議事録を保存した累計回数。応援バナーの表示判定に使う。
@@ -227,6 +238,7 @@ final class AppState {
         if UserDefaults.standard.object(forKey: Self.translationsKey) != nil {
             self.showTranslations = UserDefaults.standard.bool(forKey: Self.translationsKey)
         }
+        self.echoCancellationEnabled = UserDefaults.standard.bool(forKey: Self.echoCancellationKey)
         self.hasAcceptedDisclosure = UserDefaults.standard.bool(forKey: Self.disclosureKey)
         self.meetingSaveCount = UserDefaults.standard.integer(forKey: Self.saveCountKey)
         self.supportPromptDismissed = UserDefaults.standard.bool(forKey: Self.supportDismissedKey)
@@ -250,6 +262,7 @@ final class AppState {
     /// 言語設定の許容値 (UI の Picker と対応)。UserDefaults 破損対策。
     static let supportedLanguages: Set<String> = ["auto", "ja", "en"]
     private static let translationsKey = "showTranslations"
+    private static let echoCancellationKey = "echoCancellationEnabled"
     private static let uiScaleKey = "uiScale"
     private static let disclosureKey = "hasAcceptedDisclosure"
     private static let saveCountKey = "meetingSaveCount"

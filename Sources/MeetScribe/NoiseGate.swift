@@ -24,8 +24,23 @@ final class NoiseGate: @unchecked Sendable {
         /// hold で発話終了後も最低このms間は送信を継続することでそれを防ぐ
         var holdMs: Float = 0
 
-        /// マイク用デフォルト: Voice Processing (AGC+NS) 後の信号は低レベルなため閾値を緩く
+        /// マイク用デフォルト (生キャプチャ / Voice Processing 無効)。
+        /// AGC の自動増幅が無いぶん小声・遠距離の発話レベルが低くなるため、
+        /// VPIO 時代の -55/-60 より開閾値を緩める。実測 (MacBook Pro 内蔵マイク):
+        /// 静かな室内の環境音 ≈ -74dBFS、通常発話 ≈ -30〜-23dBFS。
+        /// 下げすぎはノイズ送信でコスト増どまりだが、上げすぎは発話の取りこぼし
+        /// (製品として致命的) なので安全側 = 低めに振る。
         static let microphone = Config(
+            openThresholdDB: -62.0,
+            closeThresholdDB: -68.0,
+            attackMs: 5.0,
+            releaseMs: 50.0,
+            holdMs: 1000.0
+        )
+
+        /// マイク用 (Voice Processing 有効時)。AGC+NS 後の信号レベルに合わせた
+        /// 従来チューニング。エコーキャンセル設定 ON のときだけ使う。
+        static let microphoneVoiceProcessing = Config(
             openThresholdDB: -55.0,
             closeThresholdDB: -60.0,
             attackMs: 5.0,

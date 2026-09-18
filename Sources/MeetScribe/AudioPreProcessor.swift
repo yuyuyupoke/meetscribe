@@ -24,6 +24,14 @@ final class AudioPreProcessor: @unchecked Sendable {
             enableSpectralAnalysis: false
         )
 
+        /// エコーキャンセル (Voice Processing) 有効時のマイク用。
+        /// AGC 後の信号レベルに合わせた従来のゲート閾値を使う。
+        static let microphoneVoiceProcessing = Config(
+            noiseGateConfig: .microphoneVoiceProcessing,
+            spectralConfig: .default,
+            enableSpectralAnalysis: false
+        )
+
         static let systemAudio = Config(
             noiseGateConfig: .systemAudio,
             spectralConfig: SpectralAnalyzer.Config(

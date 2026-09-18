@@ -6,14 +6,17 @@ import Foundation
 /// 設計:
 ///   * input ノードに直接 tap を install してハードウェアサンプルレートのまま PCM
 ///     バッファを取得する。リサンプル (48kHz → 24kHz) は PCMConverter で行う。
-///   * **Voice Processing (AEC + AGC + NS) を有効化** して以下を実現:
+///   * **Voice Processing (AEC + AGC + NS) はデフォルト無効**。VPIO を有効化した瞬間に
+///     マイクデバイスが再構成され、同じマイクを掴んでいる通話アプリ (Discord / Zoom 等、
+///     WebRTC が CoreAudio HAL を直接使う実装) の入力ストリームが復帰不能に停止する
+///     — 相手に声が届かなくなる (2026-09-01 に Discord 通話ログとの突合で実証。
+///     Apple Dev Forums thread/751100 と同型の macOS 側問題で、アプリからの回避策はない)。
+///   * `voiceProcessing: true` (エコーキャンセル設定 ON) の場合のみ VPIO を有効化する:
 ///       - AEC: スピーカーから出ている相手の声をマイクが拾っても除去 (オンライン
 ///         会議で相手の発話が `[自分]` として2重記録される問題の解消)
-///       - AGC: マイク入力レベルが小さい時に自動増幅 → 文字起こし精度向上
-///       - NS:  環境ノイズ抑制 → 文字起こし精度向上
-///   * 副作用としてシステム音出力が ducking (自動減衰) されるが、macOS 14+ の
-///     `voiceProcessingOtherAudioDuckingConfiguration` で `.min` レベルに固定し、
-///     体感では音量低下を感じない状態にする。
+///       - AGC/NS: 自動増幅とノイズ抑制
+///       - 副作用の ducking は `.min` に固定
+///     イヤホン利用ならエコーは物理的に発生しないため OFF のままで問題ない。
 ///
 /// macOS 26 で `outputFormat(forBus:)` を使うと tap callback が初回しか呼ばれない
 /// 既知挙動があるため、フォーマット取得は `inputFormat(forBus:)` を使う。
@@ -47,6 +50,11 @@ final class MicrophoneCapture: @unchecked Sendable {
     /// (`nullptr == Tap()`) を投げて Swift から catch 不能 = プロセス即死する。
     private var tapInstalled = false
 
+    /// 今回の start() で VPIO を実際に有効化したか。teardown 時の解放判定に使う。
+    /// 無効時に setVoiceProcessingEnabled(false) を呼ばないのは、解放処理自体が
+    /// デバイス構成に触れる余地を残さないため (生キャプチャは何も掴んでいない)。
+    private var voiceProcessingActive = false
+
     /// tap の到達状況 (watchdog の唯一の入力)。判定材料の意味づけは
     /// `MicrophoneTapClock` 側のコメント参照。
     private let tapClock = MicrophoneTapClock()
@@ -62,7 +70,7 @@ final class MicrophoneCapture: @unchecked Sendable {
     /// engine が running を報告するだけでは true にならないのが要点。
     var hasTapArrivedSinceStart: Bool { tapClock.hasTapArrived }
 
-    func start(onBuffer: BufferHandler? = nil) throws {
+    func start(voiceProcessing: Bool = false, onBuffer: BufferHandler? = nil) throws {
         // 既に動いている場合は一旦止めてから開始する。早期 return すると新しい
         // bufferHandler への差し替えがスキップされ、切断済みの旧パイプラインに
         // 音声が流れ続けて「録音中なのに文字起こしが来ない」詰みになる。
@@ -74,24 +82,31 @@ final class MicrophoneCapture: @unchecked Sendable {
 
         let input = engine.inputNode
 
-        // Voice Processing 有効化 (AEC + AGC + NS)。
-        do {
-            try input.setVoiceProcessingEnabled(true)
-            DebugLog.log("[mic] voice processing enabled (AEC+AGC+NS)")
-        } catch {
-            // 失敗してもキャプチャ自体は続行 (生音で動かす)
-            DebugLog.log("[mic] voice processing enable failed: \(error.localizedDescription)")
-        }
+        if voiceProcessing {
+            // Voice Processing 有効化 (AEC + AGC + NS)。オプトイン時のみ。
+            // 有効化するとマイクを共有する通話アプリの入力が止まる副作用がある
+            // (クラス先頭コメント参照)。
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                voiceProcessingActive = true
+                DebugLog.log("[mic] voice processing enabled (AEC+AGC+NS)")
+            } catch {
+                // 失敗してもキャプチャ自体は続行 (生音で動かす)
+                DebugLog.log("[mic] voice processing enable failed: \(error.localizedDescription)")
+            }
 
-        // 他オーディオへの ducking を最小化 (システム音減衰を抑制)。
-        // macOS 14+ のみ。`.min` でも完全にゼロにはならないが、体感では問題ない範囲。
-        if #available(macOS 14.0, *) {
-            let ducking = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
-                enableAdvancedDucking: false,
-                duckingLevel: .min
-            )
-            input.voiceProcessingOtherAudioDuckingConfiguration = ducking
-            DebugLog.log("[mic] ducking configured: level=.min")
+            // 他オーディオへの ducking を最小化 (システム音減衰を抑制)。
+            // macOS 14+ のみ。`.min` でも完全にゼロにはならないが、体感では問題ない範囲。
+            if #available(macOS 14.0, *) {
+                let ducking = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+                    enableAdvancedDucking: false,
+                    duckingLevel: .min
+                )
+                input.voiceProcessingOtherAudioDuckingConfiguration = ducking
+                DebugLog.log("[mic] ducking configured: level=.min")
+            }
+        } else {
+            DebugLog.log("[mic] voice processing disabled (raw capture)")
         }
 
         let inputFormat = input.inputFormat(forBus: 0)
@@ -170,11 +185,13 @@ final class MicrophoneCapture: @unchecked Sendable {
             tapInstalled = false
         }
         engine.stop()
-        // VoiceProcessingIO AudioUnit (AEC/AGC/NS) を明示解放する。これを怠ると
-        // CoreAudio (coreaudiod) に孤児 VPIO が残り、プロセス終了時に OS 全体の
-        // オーディオ HAL がブロックして Mac がフリーズする。setVoiceProcessingEnabled
-        // が start 時に失敗していても try? で無害。
-        try? engine.inputNode.setVoiceProcessingEnabled(false)
+        // VoiceProcessingIO AudioUnit (AEC/AGC/NS) を有効化していた場合は明示解放する。
+        // これを怠ると CoreAudio (coreaudiod) に孤児 VPIO が残り、プロセス終了時に
+        // OS 全体のオーディオ HAL がブロックして Mac がフリーズする。
+        if voiceProcessingActive {
+            try? engine.inputNode.setVoiceProcessingEnabled(false)
+            voiceProcessingActive = false
+        }
         bufferHandler = nil
     }
 
